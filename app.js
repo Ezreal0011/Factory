@@ -96,9 +96,11 @@ const state = {
   links: [],
   powerLinks: [],
   selectedId: null,
+  selectedIds: [],
   selectedLinkId: null,
   selectedLinkType: null,
   dragLink: null,
+  selectionBox: null,
   connectMode: "logistics",
   showLogistics: true,
   showPower: true,
@@ -106,6 +108,7 @@ const state = {
   alertFilter: "all",
   lastMonitorRender: 0,
   pointer: { x: 0, y: 0 },
+  viewport: { x: 0, y: 0, scale: 1 },
   lastTime: performance.now(),
   totalThroughput: 0,
   logisticsHistory: [],
@@ -182,6 +185,18 @@ function storeText(store) {
   return entries.map(([key, value]) => `${resourceName(key)} ${Math.floor(value)}`).join(" / ");
 }
 
+function storeBadgesHtml(store) {
+  const entries = Object.entries(store).filter(([, value]) => value > 0.05).slice(0, 4);
+  if (!entries.length) return `<span class="resource-empty">空</span>`;
+  return entries.map(([key, value]) => `
+    <span class="resource-badge" title="${resourceName(key)} ${Math.floor(value)}">
+      <i style="background:${resourceColor(key)}"></i>
+      <b>${resourceName(key)}</b>
+      <em>${Math.floor(value)}</em>
+    </span>
+  `).join("");
+}
+
 function activeRecipe(node) {
   const list = recipes[node.kind];
   return list ? list[node.recipeIndex] : null;
@@ -244,8 +259,7 @@ function addNode(kind, resource = null) {
   node.y = Math.min(node.y, rect.height - 150);
   state.nodes.push(node);
   if (kind !== "source") state.inventory[kind] -= 1;
-  state.selectedId = node.id;
-  state.selectedLinkId = null;
+  setSingleSelection(node.id);
   setStatus(`已创建 ${nodeTitle(node)}`, "ok");
   render();
 }
@@ -495,7 +509,9 @@ function polylineLength(points) {
 }
 
 function render(options = {}) {
+  applyViewportTransform();
   renderNodes();
+  renderSelectionBox();
   renderLinks();
   if (!options.skipInspector) {
     renderInspector();
@@ -506,6 +522,140 @@ function render(options = {}) {
   }
   renderInventory();
   deleteSelectedLinkButton.disabled = !state.selectedLinkId;
+}
+
+function applyViewportTransform() {
+  const transform = `translate(${state.viewport.x}px, ${state.viewport.y}px) scale(${state.viewport.scale})`;
+  nodesLayer.style.transform = transform;
+  linksLayer.style.transform = transform;
+  const gridSize = 28 * state.viewport.scale;
+  canvas.style.backgroundSize = `${gridSize}px ${gridSize}px`;
+  canvas.style.backgroundPosition = `${state.viewport.x}px ${state.viewport.y}px`;
+  canvas.classList.toggle("zoom-far", state.viewport.scale < 0.65);
+  canvas.classList.toggle("zoom-mid", state.viewport.scale >= 0.65 && state.viewport.scale < 0.95);
+  canvas.classList.toggle("zoom-near", state.viewport.scale >= 0.95);
+}
+
+function selectedNodeIds() {
+  if (state.selectedIds.length) return [...state.selectedIds];
+  return state.selectedId ? [state.selectedId] : [];
+}
+
+function isNodeSelected(nodeId) {
+  return selectedNodeIds().includes(nodeId);
+}
+
+function setSingleSelection(nodeId) {
+  state.selectedId = nodeId;
+  state.selectedIds = [];
+  state.selectedLinkId = null;
+  state.selectedLinkType = null;
+}
+
+function setMultiSelection(ids) {
+  const unique = [...new Set(ids)].filter((id) => nodeById(id));
+  state.selectedIds = unique;
+  state.selectedId = unique.length === 1 ? unique[0] : null;
+  state.selectedLinkId = null;
+  state.selectedLinkType = null;
+}
+
+function startCanvasPan(event) {
+  const start = {
+    x: event.clientX,
+    y: event.clientY,
+    viewX: state.viewport.x,
+    viewY: state.viewport.y
+  };
+  let moved = false;
+  canvas.classList.add("panning");
+  const move = (moveEvent) => {
+    moved = true;
+    state.viewport.x = start.viewX + moveEvent.clientX - start.x;
+    state.viewport.y = start.viewY + moveEvent.clientY - start.y;
+    applyViewportTransform();
+  };
+  const up = () => {
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", up);
+    canvas.classList.remove("panning");
+    if (!moved) clearSelection();
+    render();
+  };
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", up);
+}
+
+function zoomCanvasAt(event) {
+  event.preventDefault();
+  const rect = canvas.getBoundingClientRect();
+  const screenX = event.clientX - rect.left;
+  const screenY = event.clientY - rect.top;
+  const before = screenToWorld(screenX, screenY);
+  const factor = event.deltaY < 0 ? 1.12 : 1 / 1.12;
+  const nextScale = clamp(state.viewport.scale * factor, 0.45, 2.4);
+  state.viewport.scale = nextScale;
+  state.viewport.x = screenX - before.x * nextScale;
+  state.viewport.y = screenY - before.y * nextScale;
+  applyViewportTransform();
+}
+
+function screenToWorld(screenX, screenY) {
+  return {
+    x: (screenX - state.viewport.x) / state.viewport.scale,
+    y: (screenY - state.viewport.y) / state.viewport.scale
+  };
+}
+
+function toggleNodeSelection(nodeId) {
+  const ids = selectedNodeIds();
+  if (ids.includes(nodeId)) setMultiSelection(ids.filter((id) => id !== nodeId));
+  else setMultiSelection([...ids, nodeId]);
+}
+
+function clearSelection() {
+  state.selectedId = null;
+  state.selectedIds = [];
+  state.selectedLinkId = null;
+  state.selectedLinkType = null;
+}
+
+function focusContext() {
+  const selected = selectedNodeIds();
+  if (!selected.length) return null;
+  const selectedSet = new Set(selected);
+  const nodeIds = new Set(selected);
+  const logisticsLinkIds = new Set();
+  const powerLinkIds = new Set();
+  for (const link of state.links) {
+    if (selectedSet.has(link.fromNode) || selectedSet.has(link.toNode)) {
+      nodeIds.add(link.fromNode);
+      nodeIds.add(link.toNode);
+      logisticsLinkIds.add(link.id);
+    }
+  }
+  for (const link of state.powerLinks) {
+    if (selectedSet.has(link.fromNode) || selectedSet.has(link.toNode)) {
+      nodeIds.add(link.fromNode);
+      nodeIds.add(link.toNode);
+      powerLinkIds.add(link.id);
+    }
+  }
+  return { selectedSet, nodeIds, logisticsLinkIds, powerLinkIds };
+}
+
+function focusRole(nodeId, focus) {
+  if (!focus || !focus.nodeIds.has(nodeId)) return "";
+  if (focus.selectedSet.has(nodeId)) return "聚焦";
+  const selected = [...focus.selectedSet];
+  const isInput = state.links.some((link) => link.fromNode === nodeId && selected.includes(link.toNode))
+    || state.powerLinks.some((link) => link.fromNode === nodeId && selected.includes(link.toNode));
+  const isOutput = state.links.some((link) => selected.includes(link.fromNode) && link.toNode === nodeId)
+    || state.powerLinks.some((link) => selected.includes(link.fromNode) && link.toNode === nodeId);
+  if (isInput && isOutput) return "上下级";
+  if (isInput) return "输入来源";
+  if (isOutput) return "输出目标";
+  return "";
 }
 
 function renderInventory() {
@@ -531,12 +681,15 @@ function setDeviceTab(group) {
 
 function renderNodes() {
   nodesLayer.innerHTML = "";
+  const focus = focusContext();
   for (const node of state.nodes) {
     const type = nodeTypes[node.kind];
     const runState = nodeRunState(node);
     const powerClass = powerVisualClass(node);
+    const dimClass = focus && !focus.nodeIds.has(node.id) ? "dimmed-node" : "";
+    const relationRole = focusRole(node.id, focus);
     const element = document.createElement("article");
-    element.className = `node state-${runState.key} ${powerClass} ${node.id === state.selectedId ? "selected" : ""}`;
+    element.className = `node state-${runState.key} ${powerClass} ${dimClass} ${isNodeSelected(node.id) ? "selected" : ""} ${state.selectedIds.length > 1 && isNodeSelected(node.id) ? "multi-selected" : ""}`;
     element.dataset.id = node.id;
     element.style.left = `${node.x}px`;
     element.style.top = `${node.y}px`;
@@ -546,33 +699,29 @@ function renderNodes() {
         <i style="background:${node.kind === "source" ? resourceColor(node.resource) : ""}"></i>
       </div>
       <div class="node-body">
-        <div>${type.desc}</div>
+        ${relationRole ? `<div class="relation-badge">${relationRole}</div>` : ""}
+        <div class="node-desc detail-layer">${type.desc}</div>
         <div class="run-state ${runState.key}">运行状态 ${runState.label}</div>
         ${activeRecipe(node) ? `
-          <div>配方 ${activeRecipe(node).name}</div>
-          <div class="node-progress"><span style="width:${Math.floor(node.progress * 100)}%"></span></div>
+          <div class="node-recipe mid-layer">配方 ${activeRecipe(node).name}</div>
+          <div class="node-progress mid-layer"><span style="width:${Math.floor(node.progress * 100)}%"></span></div>
         ` : ""}
         ${node.kind === "miner" ? `
-          <div>采矿进度</div>
-          <div class="node-progress"><span style="width:${Math.floor(node.progress * 100)}%"></span></div>
+          <div class="node-recipe mid-layer">采矿进度</div>
+          <div class="node-progress mid-layer"><span style="width:${Math.floor(node.progress * 100)}%"></span></div>
         ` : ""}
         ${nodeTypes[node.kind].powerIn ? `<div class="power-state ${node.powered ? "on" : "off"}">${node.powered ? "已供电" : "未供电"}</div>` : ""}
-        ${node.kind === "generator" ? `<div>发电 ${node.generating ? `${nodeTypes.generator.generation}` : "0"}</div>` : ""}
+        ${node.kind === "generator" ? `<div class="mid-layer">发电 ${node.generating ? `${nodeTypes.generator.generation}` : "0"}</div>` : ""}
         ${node.kind === "source" ? `
-          <div>${node.reserve <= 0 ? "消耗殆尽" : "矿源余量"}</div>
-          <div class="reserve-progress"><span style="width:${Math.floor(sourceReserveRatio(node) * 100)}%; background:${sourceReserveColor(node)}"></span></div>
+          <div class="mid-layer">${node.reserve <= 0 ? "消耗殆尽" : "矿源余量"}</div>
+          <div class="reserve-progress mid-layer"><span style="width:${Math.floor(sourceReserveRatio(node) * 100)}%; background:${sourceReserveColor(node)}"></span></div>
         ` : ""}
-        <div>输入 ${storeText(node.inputStore)}</div>
-        <div>输出 ${storeText(outputStoreFor(node))}</div>
+        <div class="node-store detail-layer"><span>输入</span><div>${storeBadgesHtml(node.inputStore)}</div></div>
+        <div class="node-store detail-layer"><span>输出</span><div>${storeBadgesHtml(outputStoreFor(node))}</div></div>
       </div>
       ${portsHtml(node)}
     `;
     element.addEventListener("pointerdown", startNodeDrag);
-    element.addEventListener("click", () => {
-      state.selectedId = node.id;
-      state.selectedLinkId = null;
-      render();
-    });
     nodesLayer.appendChild(element);
   }
 }
@@ -588,19 +737,49 @@ function powerVisualClass(node) {
 function portsHtml(node) {
   let html = "";
   for (let i = 0; i < activeInputs(node); i += 1) {
-    html += `<button class="port in ${isInputUsed(node.id, i) ? "used" : ""} ${node.kind === "warehouse" && !node.inputOpen[i] ? "closed" : ""}" data-node="${node.id}" data-side="in" data-index="${i}" style="top:${48 + i * 22}px" title="输入口 ${i + 1}"></button>`;
+    html += `<button class="port in ${isInputUsed(node.id, i) ? "used" : ""} ${node.kind === "warehouse" && !node.inputOpen[i] ? "closed" : ""}" data-node="${node.id}" data-side="in" data-index="${i}" style="top:${logisticsPortTop(i)}px" title="${portTitle(node, "in", i)}"></button>`;
   }
   for (let i = 0; i < activeOutputs(node); i += 1) {
-    html += `<button class="port out ${isOutputUsed(node.id, i) ? "used" : ""} ${node.kind === "warehouse" && !node.outputOpen[i] ? "closed" : ""}" data-node="${node.id}" data-side="out" data-index="${i}" style="top:${48 + i * 22}px" title="输出口 ${i + 1}"></button>`;
+    html += `<button class="port out ${isOutputUsed(node.id, i) ? "used" : ""} ${node.kind === "warehouse" && !node.outputOpen[i] ? "closed" : ""}" data-node="${node.id}" data-side="out" data-index="${i}" style="top:${logisticsPortTop(i)}px" title="${portTitle(node, "out", i)}"></button>`;
   }
   if (nodeTypes[node.kind].powerIn) {
-    html += `<button class="port power-in ${isPowerInputUsed(node.id) ? "used" : ""}" data-node="${node.id}" data-side="power-in" data-index="0" title="电力输入"></button>`;
+    html += `<button class="port power-in ${isPowerInputUsed(node.id) ? "used" : ""}" data-node="${node.id}" data-side="power-in" data-index="0" title="${portTitle(node, "power-in", 0)}"></button>`;
   }
   for (let i = 0; i < activePowerOutputs(node); i += 1) {
-    const top = activePowerOutputs(node) > 1 ? 51 + i * 24 : 95;
-    html += `<button class="port power-out ${isPowerOutputUsed(node.id, i) ? "used" : ""}" data-node="${node.id}" data-side="power-out" data-index="${i}" style="top:${top}px" title="电力输出 ${i + 1}"></button>`;
+    const top = powerOutputPortTop(node, i);
+    html += `<button class="port power-out ${isPowerOutputUsed(node.id, i) ? "used" : ""}" data-node="${node.id}" data-side="power-out" data-index="${i}" style="top:${top}px" title="${portTitle(node, "power-out", i)}"></button>`;
   }
   return html;
+}
+
+function logisticsPortTop(index) {
+  if (state.viewport.scale < 0.95) return 42 + index * 14;
+  return 48 + index * 22;
+}
+
+function powerOutputPortTop(node, index) {
+  const count = activePowerOutputs(node);
+  if (count <= 1) return state.viewport.scale < 0.95 ? 78 : 95;
+  if (state.viewport.scale < 0.65) return 42 + index * 18;
+  if (state.viewport.scale < 0.95) return 44 + index * 20;
+  return 51 + index * 24;
+}
+
+function portTitle(node, side, index) {
+  if (side === "power-in") {
+    const link = state.powerLinks.find((item) => item.toNode === node.id);
+    return link ? `电力输入：${link.load || 0}/${link.capacity}` : "电力输入：未连接";
+  }
+  if (side === "power-out") {
+    const link = state.powerLinks.find((item) => item.fromNode === node.id && (item.fromPort || 0) === index);
+    return link ? `电力输出 ${index + 1}：${link.load || 0}/${link.capacity}` : `电力输出 ${index + 1}：未连接`;
+  }
+  if (side === "in") {
+    const link = state.links.find((item) => item.toNode === node.id && item.toPort === index);
+    return link ? `输入口 ${index + 1}：${resourceName(link.resource)}` : `输入口 ${index + 1}：未连接`;
+  }
+  const link = state.links.find((item) => item.fromNode === node.id && item.fromPort === index);
+  return link ? `输出口 ${index + 1}：${resourceName(link.resource)}` : `输出口 ${index + 1}：未连接`;
 }
 
 function renderLinks() {
@@ -608,30 +787,43 @@ function renderLinks() {
   renderLinkMarkers();
   const fadeLogistics = state.lineView === "power";
   const fadePower = state.lineView === "logistics";
-  for (const link of state.links) {
+  const focus = focusContext();
+  const logistics = state.links
+    .map((link) => ({ link, priority: isPriorityLogisticsLink(link, focus) ? 1 : 0 }))
+    .sort((a, b) => a.priority - b.priority);
+  const power = state.powerLinks
+    .map((link) => ({ link, priority: isPriorityPowerLink(link, focus) ? 1 : 0 }))
+    .sort((a, b) => a.priority - b.priority);
+  for (const item of logistics) {
+    const link = item.link;
     const from = nodeById(link.fromNode);
     const to = nodeById(link.toNode);
     if (!from || !to) continue;
     const points = logisticsPathPoints(link);
     const d = pathFor(points);
-    const related = state.selectedId && (link.fromNode === state.selectedId || link.toNode === state.selectedId);
-    const unrelatedSelected = state.selectedId && !related;
+    const selectedIds = selectedNodeIds();
+    const related = selectedIds.length && (selectedIds.includes(link.fromNode) || selectedIds.includes(link.toNode));
+    const unrelatedSelected = selectedIds.length && !related;
+    const focusDimmed = focus && !focus.logisticsLinkIds.has(link.id);
     const health = logisticsLinkHealth(link);
     appendPath(d, "link-hit", link.id);
-    appendPath(d, `link ${health} ${fadeLogistics || unrelatedSelected ? "muted-line" : ""} ${link.id === state.selectedLinkId ? "selected" : ""} ${related ? "related" : ""}`, link.id, link.resource);
-    renderPackets(link, points, fadeLogistics || unrelatedSelected);
+    appendPath(d, `link ${health} ${fadeLogistics || unrelatedSelected || focusDimmed ? "muted-line" : ""} ${focusDimmed ? "focus-dimmed-line" : ""} ${link.id === state.selectedLinkId ? "selected" : ""} ${related ? "related" : ""}`, link.id, link.resource);
+    renderPackets(link, points, fadeLogistics || unrelatedSelected || focusDimmed, focusDimmed);
   }
-  for (const link of state.powerLinks) {
+  for (const item of power) {
+    const link = item.link;
     const from = nodeById(link.fromNode);
     const to = nodeById(link.toNode);
     if (!from || !to) continue;
     const points = powerPathPoints(portPosition(from, "power-out", link.fromPort || 0), portPosition(to, "power-in", 0));
     const d = pathFor(points);
-    const related = state.selectedId && (link.fromNode === state.selectedId || link.toNode === state.selectedId);
-    appendPath(d, `link power-glow ${fadePower ? "muted-line" : ""} ${link.overloaded ? "overloaded" : ""}`);
+    const selectedIds = selectedNodeIds();
+    const related = selectedIds.length && (selectedIds.includes(link.fromNode) || selectedIds.includes(link.toNode));
+    const focusDimmed = focus && !focus.powerLinkIds.has(link.id);
+    appendPath(d, `link power-glow ${fadePower || focusDimmed ? "muted-line" : ""} ${focusDimmed ? "focus-dimmed-line" : ""} ${link.overloaded ? "overloaded" : ""}`);
     appendPath(d, "link-hit", link.id, null, "power");
-    appendPath(d, `link power ${fadePower ? "muted-line" : ""} ${link.overloaded ? "overloaded" : ""} ${link.id === state.selectedLinkId && state.selectedLinkType === "power" ? "selected" : ""} ${related ? "related" : ""}`, link.id, null, "power");
-    renderPowerPackets(link, points, fadePower);
+    appendPath(d, `link power ${fadePower || focusDimmed ? "muted-line" : ""} ${focusDimmed ? "focus-dimmed-line" : ""} ${link.overloaded ? "overloaded" : ""} ${link.id === state.selectedLinkId && state.selectedLinkType === "power" ? "selected" : ""} ${related ? "related" : ""}`, link.id, null, "power");
+    renderPowerPackets(link, points, fadePower || focusDimmed, focusDimmed);
   }
   if (state.dragLink) {
     const from = nodeById(state.dragLink.fromNode);
@@ -642,6 +834,14 @@ function renderLinks() {
       appendPath(pathFor(points), `link preview ${state.dragLink.type === "power" ? "power" : ""}`);
     }
   }
+}
+
+function isPriorityLogisticsLink(link, focus) {
+  return link.id === state.selectedLinkId || Boolean(focus?.logisticsLinkIds.has(link.id));
+}
+
+function isPriorityPowerLink(link, focus) {
+  return link.id === state.selectedLinkId || Boolean(focus?.powerLinkIds.has(link.id));
 }
 
 function logisticsLinkHealth(link) {
@@ -663,6 +863,38 @@ function renderLinkMarkers() {
   linksLayer.appendChild(defs);
 }
 
+function renderSelectionBox() {
+  document.querySelector(".selection-box")?.remove();
+  if (!state.selectionBox) return;
+  const rect = selectionRect(state.selectionBox.start, state.selectionBox.current);
+  const box = document.createElement("div");
+  box.className = "selection-box";
+  box.style.left = `${rect.x * state.viewport.scale + state.viewport.x}px`;
+  box.style.top = `${rect.y * state.viewport.scale + state.viewport.y}px`;
+  box.style.width = `${rect.width * state.viewport.scale}px`;
+  box.style.height = `${rect.height * state.viewport.scale}px`;
+  canvas.appendChild(box);
+}
+
+function selectionRect(a, b) {
+  const x = Math.min(a.x, b.x);
+  const y = Math.min(a.y, b.y);
+  return {
+    x,
+    y,
+    width: Math.abs(a.x - b.x),
+    height: Math.abs(a.y - b.y)
+  };
+}
+
+function nodeIntersectsRect(node, rect) {
+  const nodeRect = { x: node.x, y: node.y, width: 166, height: 112 };
+  return nodeRect.x < rect.x + rect.width
+    && nodeRect.x + nodeRect.width > rect.x
+    && nodeRect.y < rect.y + rect.height
+    && nodeRect.y + nodeRect.height > rect.y;
+}
+
 function linkPoints(link) {
   return logisticsPathPoints(link);
 }
@@ -682,6 +914,7 @@ function appendPath(d, className, linkId = null, resource = null, linkType = "lo
       state.selectedLinkId = linkId;
       state.selectedLinkType = linkType;
       state.selectedId = null;
+      state.selectedIds = [];
       setStatus("已选中连线，可按 Delete 删除", "ok");
       render();
     });
@@ -689,7 +922,7 @@ function appendPath(d, className, linkId = null, resource = null, linkType = "lo
   linksLayer.appendChild(path);
 }
 
-function renderPackets(link, points, muted = false) {
+function renderPackets(link, points, muted = false, focusDimmed = false) {
   const length = polylineLength(points);
   for (const packet of link.packets) {
     const point = pointOnPolylineDistance(points, packet.distance || packet.progress * length || 0);
@@ -697,13 +930,13 @@ function renderPackets(link, points, muted = false) {
     circle.setAttribute("cx", point.x);
     circle.setAttribute("cy", point.y);
     circle.setAttribute("r", 4);
-    circle.setAttribute("class", `packet ${muted ? "muted-line" : ""}`);
+    circle.setAttribute("class", `packet ${muted ? "muted-line" : ""} ${focusDimmed ? "focus-dimmed-packet" : ""}`);
     circle.setAttribute("fill", resourceColor(packet.resource));
     linksLayer.appendChild(circle);
   }
 }
 
-function renderPowerPackets(link, points, muted = false) {
+function renderPowerPackets(link, points, muted = false, focusDimmed = false) {
   const from = nodeById(link.fromNode);
   if (!from?.generating && !from?.powered) return;
   const length = polylineLength(points);
@@ -715,12 +948,16 @@ function renderPowerPackets(link, points, muted = false) {
     circle.setAttribute("cx", point.x);
     circle.setAttribute("cy", point.y);
     circle.setAttribute("r", 3.5);
-    circle.setAttribute("class", `power-packet ${muted ? "muted-line" : ""}`);
+    circle.setAttribute("class", `power-packet ${muted ? "muted-line" : ""} ${focusDimmed ? "focus-dimmed-packet" : ""}`);
     linksLayer.appendChild(circle);
   }
 }
 
 function renderInspector() {
+  if (state.selectedIds.length > 1) {
+    renderMultiSelectionInspector();
+    return;
+  }
   const node = nodeById(state.selectedId);
   if (!node) {
     renderLinkInspector();
@@ -787,6 +1024,22 @@ function renderInspector() {
       render();
     });
   });
+}
+
+function renderMultiSelectionInspector() {
+  const nodes = state.selectedIds.map(nodeById).filter(Boolean);
+  const powerNodes = nodes.filter((node) => nodeTypes[node.kind].powerIn || nodeTypes[node.kind].powerOut).length;
+  const logisticsLinks = state.links.filter((link) => state.selectedIds.includes(link.fromNode) || state.selectedIds.includes(link.toNode)).length;
+  const powerLinks = state.powerLinks.filter((link) => state.selectedIds.includes(link.fromNode) || state.selectedIds.includes(link.toNode)).length;
+  inspector.innerHTML = `
+    <div class="info-row"><span>已选节点</span><b>${nodes.length}</b></div>
+    <div class="info-row"><span>电力节点</span><b>${powerNodes}</b></div>
+    <div class="info-row"><span>相关物流线</span><b>${logisticsLinks}</b></div>
+    <div class="info-row"><span>相关电力线</span><b>${powerLinks}</b></div>
+    <div class="info-row"><span>批量操作</span><b>拖动任一选中节点可整体移动</b></div>
+    <button class="inspector-action danger" id="delete-selected-node" type="button">删除选中节点</button>
+  `;
+  document.querySelector("#delete-selected-node").addEventListener("click", deleteSelectedNode);
 }
 
 function recipeControlHtml(node) {
@@ -900,7 +1153,7 @@ function recipeUsageText(recipe) {
 function openRecipeDialog(nodeId) {
   const node = nodeById(nodeId);
   if (!node || !recipes[node.kind]) return;
-  state.selectedId = nodeId;
+  setSingleSelection(nodeId);
   renderRecipeDialog(node);
   recipeDialog.showModal();
 }
@@ -1456,9 +1709,7 @@ function renderAlerts() {
     : `<div class="muted">暂无警报</div>`;
   alertsPanel.querySelectorAll("[data-locate]").forEach((button) => {
     button.addEventListener("click", () => {
-      state.selectedId = button.dataset.locate;
-      state.selectedLinkId = null;
-      state.selectedLinkType = null;
+      setSingleSelection(button.dataset.locate);
       renderInspector();
       renderNodes();
       setStatus("已定位警报节点", "ok");
@@ -1534,23 +1785,41 @@ function isPowerOutputUsed(nodeId, port) {
 
 function startNodeDrag(event) {
   if (event.target.classList.contains("port") || event.button !== 0) return;
+  event.stopPropagation();
   const node = nodeById(event.currentTarget.dataset.id);
-  state.selectedId = node.id;
-  state.selectedLinkId = null;
-  const start = { x: event.clientX, y: event.clientY, nodeX: node.x, nodeY: node.y };
+  if (event.shiftKey || event.ctrlKey || event.metaKey) {
+    toggleNodeSelection(node.id);
+    window.addEventListener("pointerup", () => setTimeout(render, 0), { once: true });
+    return;
+  }
+  if (!isNodeSelected(node.id)) setSingleSelection(node.id);
+  const movingIds = selectedNodeIds();
+  const startPositions = movingIds
+    .map((id) => nodeById(id))
+    .filter(Boolean)
+    .map((item) => ({ id: item.id, x: item.x, y: item.y }));
+  const start = { x: event.clientX, y: event.clientY };
   const move = (moveEvent) => {
     const rect = canvas.getBoundingClientRect();
-    node.x = clamp(start.nodeX + moveEvent.clientX - start.x, 10, rect.width - 190);
-    node.y = clamp(start.nodeY + moveEvent.clientY - start.y, 54, rect.height - 130);
+    const dx = (moveEvent.clientX - start.x) / state.viewport.scale;
+    const dy = (moveEvent.clientY - start.y) / state.viewport.scale;
+    for (const item of startPositions) {
+      const target = nodeById(item.id);
+      if (!target) continue;
+      const maxX = (rect.width - state.viewport.x) / state.viewport.scale - 190;
+      const maxY = (rect.height - state.viewport.y) / state.viewport.scale - 130;
+      target.x = clamp(item.x + dx, -state.viewport.x / state.viewport.scale + 10, maxX);
+      target.y = clamp(item.y + dy, -state.viewport.y / state.viewport.scale + 54, maxY);
+    }
     render();
   };
   const up = () => {
     window.removeEventListener("pointermove", move);
     window.removeEventListener("pointerup", up);
+    setTimeout(render, 0);
   };
   window.addEventListener("pointermove", move);
   window.addEventListener("pointerup", up);
-  render();
 }
 
 function clamp(value, min, max) {
@@ -1610,10 +1879,14 @@ window.addEventListener("pointerup", (event) => {
 });
 
 function updatePointer(event) {
+  state.pointer = canvasPoint(event);
+}
+
+function canvasPoint(event) {
   const rect = canvas.getBoundingClientRect();
-  state.pointer = {
-    x: event.clientX - rect.left,
-    y: event.clientY - rect.top
+  return {
+    x: (event.clientX - rect.left - state.viewport.x) / state.viewport.scale,
+    y: (event.clientY - rect.top - state.viewport.y) / state.viewport.scale
   };
 }
 
@@ -1773,22 +2046,31 @@ function deleteSelectedLink() {
 }
 
 function deleteSelectedNode() {
-  if (!state.selectedId) return false;
-  const node = nodeById(state.selectedId);
-  if (node?.kind === "warehouse" && storeTotal(node.inputStore) > 0) {
+  const ids = selectedNodeIds();
+  if (!ids.length) return false;
+  const nodes = ids.map(nodeById).filter(Boolean);
+  const blockedWarehouse = nodes.find((node) => node.kind === "warehouse" && storeTotal(node.inputStore) > 0);
+  if (blockedWarehouse) {
     warehouseDialog.showModal();
     warehouseDialog.addEventListener("close", () => {
       if (warehouseDialog.returnValue === "force") {
-        forceDeleteNode(node.id);
+        forceDeleteNodes(ids);
       }
     }, { once: true });
     return true;
   }
-  forceDeleteNode(state.selectedId);
+  forceDeleteNodes(ids);
   return true;
 }
 
-function forceDeleteNode(nodeId) {
+function forceDeleteNodes(nodeIds) {
+  for (const nodeId of nodeIds) forceDeleteNode(nodeId, false);
+  clearSelection();
+  setStatus(`已删除 ${nodeIds.length} 个节点，相关连线已清理`, "ok");
+  render();
+}
+
+function forceDeleteNode(nodeId, shouldRender = true) {
   const node = nodeById(nodeId);
   if (node && node.kind !== "source" && state.inventory[node.kind] !== undefined) {
     state.inventory[node.kind] += 1;
@@ -1798,11 +2080,11 @@ function forceDeleteNode(nodeId) {
   state.nodes = state.nodes.filter((item) => item.id !== nodeId);
   state.links = state.links.filter((link) => link.fromNode !== nodeId && link.toNode !== nodeId);
   state.powerLinks = state.powerLinks.filter((link) => link.fromNode !== nodeId && link.toNode !== nodeId);
-  state.selectedId = null;
-  state.selectedLinkId = null;
-  state.selectedLinkType = null;
-  setStatus(`已删除 ${node ? nodeTitle(node) : "节点"}，相关连线已清理`, "ok");
-  render();
+  if (shouldRender) {
+    clearSelection();
+    setStatus(`已删除 ${node ? nodeTitle(node) : "节点"}，相关连线已清理`, "ok");
+    render();
+  }
 }
 
 function simulate(now) {
@@ -2200,6 +2482,7 @@ function loadSaveData(data, name = "本地存档") {
     state.productionStats[key] = Math.max(state.productionStats[key] || 0, value);
   }
   state.selectedId = null;
+  state.selectedIds = [];
   state.selectedLinkId = null;
   state.selectedLinkType = null;
   nextId = data.nextId || Math.max(1, ...state.nodes.map((node) => Number(node.id.replace("node-", "")) || 1)) + 1;
@@ -2346,7 +2629,7 @@ function buildDemoLine() {
   );
   state.powerLinks.push({ id: `link-${nextId++}`, fromNode: generator.id, fromPort: 0, toNode: furnace.id, capacity: 40, load: 0, overloaded: false });
   state.cableStock -= 1;
-  state.selectedId = furnace.id;
+  setSingleSelection(furnace.id);
   setStatus("已生成测试链路：煤矿供电 + 铁矿熔炉", "ok");
   render();
 }
@@ -2459,11 +2742,39 @@ document.querySelector("#load-game").addEventListener("click", loadGame);
 
 canvas.addEventListener("pointerdown", (event) => {
   if (event.target !== canvas && event.target !== nodesLayer && event.target !== linksLayer) return;
-  state.selectedId = null;
-  state.selectedLinkId = null;
-  state.selectedLinkType = null;
+  if (event.button !== 0) return;
+  if (!event.shiftKey && !event.ctrlKey && !event.metaKey) {
+    startCanvasPan(event);
+    return;
+  }
+  const startPoint = canvasPoint(event);
+  const baseSelection = event.shiftKey || event.ctrlKey || event.metaKey ? selectedNodeIds() : [];
+  let moved = false;
+  state.selectionBox = { start: startPoint, current: startPoint };
+  const move = (moveEvent) => {
+    moved = true;
+    state.selectionBox.current = canvasPoint(moveEvent);
+    const rect = selectionRect(state.selectionBox.start, state.selectionBox.current);
+    const boxedIds = state.nodes.filter((node) => nodeIntersectsRect(node, rect)).map((node) => node.id);
+    setMultiSelection([...baseSelection, ...boxedIds]);
+    state.selectionBox = { start: startPoint, current: canvasPoint(moveEvent) };
+    render();
+  };
+  const up = () => {
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", up);
+    if (!moved || selectionRect(state.selectionBox.start, state.selectionBox.current).width < 4 && selectionRect(state.selectionBox.start, state.selectionBox.current).height < 4) {
+      if (!baseSelection.length) clearSelection();
+    }
+    state.selectionBox = null;
+    render();
+  };
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", up);
   render();
 });
+
+canvas.addEventListener("wheel", zoomCanvasAt, { passive: false });
 
 document.querySelector("#clear-lines").addEventListener("click", () => {
   state.cableStock += state.powerLinks.length;
@@ -2493,6 +2804,7 @@ document.querySelector("#clear-all").addEventListener("click", () => {
   state.logisticsPeak = 0;
   state.completed = false;
   state.selectedId = null;
+  state.selectedIds = [];
   state.selectedLinkId = null;
   state.selectedLinkType = null;
   state.selectedLinkType = null;
