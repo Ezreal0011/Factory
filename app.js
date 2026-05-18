@@ -38,7 +38,11 @@ const nodeTypes = {
   assembler: { name: "组装工厂", inputs: 4, outputs: 1, powerIn: true, demand: 16, desc: "组件与机械核心节点，当前可接入电网" },
   generator: { name: "发电机", inputs: 1, outputs: 0, powerOut: true, powerOutputs: 1, generation: 80, desc: "消耗煤矿并向电网供电" },
   pole: { name: "电杆", inputs: 0, outputs: 0, powerIn: true, powerOut: true, powerOutputs: 3, demand: 0, desc: "电力中继节点，可分出 3 路电力输出" },
-  warehouse: { name: "仓库", inputs: 4, outputs: 4, desc: "物流控制中心：单资源、分流、缓冲、中转" }
+  warehouse: { name: "仓库", inputs: 4, outputs: 4, desc: "物流控制中心：单资源、分流、缓冲、中转" },
+  adapter_input: { name: "封装输入", inputs: 3, outputs: 3, adapter: true, desc: "组外输入与组内输出的 1:1 直通接口" },
+  adapter_output: { name: "封装输出", inputs: 3, outputs: 3, adapter: true, desc: "组内输入与组外输出的 1:1 直通接口" },
+  adapter_power: { name: "封装电力", inputs: 0, outputs: 0, powerIn: true, powerOut: true, powerOutputs: 3, adapter: true, demand: 0, desc: "组外供电进入组内，负载按输出汇总" },
+  group: { name: "封装分组", inputs: 0, outputs: 0, powerIn: false, powerOut: false, group: true, desc: "由组内封装节点声明输入、输出和电力接口" }
 };
 
 const recipes = {
@@ -109,6 +113,7 @@ const state = {
   lastMonitorRender: 0,
   pointer: { x: 0, y: 0 },
   viewport: { x: 0, y: 0, scale: 1 },
+  activeGroupId: null,
   lastTime: performance.now(),
   totalThroughput: 0,
   logisticsHistory: [],
@@ -126,7 +131,10 @@ const state = {
     assembler: 5,
     generator: 1,
     pole: 4,
-    warehouse: 5
+    warehouse: 5,
+    adapter_input: 3,
+    adapter_output: 3,
+    adapter_power: 2
   }
 };
 
@@ -223,8 +231,25 @@ function deviceFromResource(resource) {
   }[resource] || null;
 }
 
+function createEmptyGroupData() {
+  return {
+    children: [],
+    inputs: [],
+    outputs: [],
+    powerInput: null
+  };
+}
+
+function createAdapterResources(kind) {
+  if (!nodeTypes[kind]?.adapter) return null;
+  return {
+    inputs: [null, null, null],
+    outputs: [null, null, null]
+  };
+}
+
 function addNode(kind, resource = null) {
-  if (kind !== "source" && (state.inventory[kind] || 0) <= 0) {
+  if (kind !== "source" && state.inventory[kind] !== undefined && (state.inventory[kind] || 0) <= 0) {
     setStatus(`${nodeTypes[kind].name} 库存不足`, "error");
     return;
   }
@@ -253,12 +278,15 @@ function addNode(kind, resource = null) {
     status: "待机",
     powered: false,
     generating: false,
+    groupId: state.activeGroupId,
+    groupData: kind === "group" ? createEmptyGroupData() : null,
+    adapterResources: createAdapterResources(kind),
     capacity: kind === "warehouse" ? WAREHOUSE_CAPACITY : DEVICE_CAPACITY
   };
   node.x = Math.min(node.x, rect.width - 210);
   node.y = Math.min(node.y, rect.height - 150);
   state.nodes.push(node);
-  if (kind !== "source") state.inventory[kind] -= 1;
+  if (kind !== "source" && state.inventory[kind] !== undefined) state.inventory[kind] -= 1;
   setSingleSelection(node.id);
   setStatus(`已创建 ${nodeTitle(node)}`, "ok");
   render();
@@ -288,6 +316,9 @@ function createNodeRaw(kind, resource, x, y) {
     status: "待机",
     powered: false,
     generating: false,
+    groupId: null,
+    groupData: kind === "group" ? createEmptyGroupData() : null,
+    adapterResources: createAdapterResources(kind),
     capacity: kind === "warehouse" ? WAREHOUSE_CAPACITY : DEVICE_CAPACITY
   };
   state.nodes.push(node);
@@ -320,6 +351,14 @@ function nodeById(id) {
 function pauseReason(node) {
   const runState = nodeRunState(node);
   if (runState.key !== "paused") return "";
+  if (node.kind === "group") {
+    const paused = groupChildren(node).find((child) => nodeRunState(child).key === "paused");
+    return paused ? `组内${nodeTitle(paused)}${pauseReason(paused) ? `-${pauseReason(paused)}` : ""}` : "组内暂停";
+  }
+  if (nodeTypes[node.kind]?.adapter) {
+    if (storeTotal(node.outputStore) >= node.capacity) return "接口堵塞";
+    return "等待连接";
+  }
   if (node.kind === "source") return node.reserve <= 0 ? "矿源耗尽" : "未接输出";
   if (node.kind === "warehouse") {
     if (storeTotal(node.inputStore) >= node.capacity) return "仓库已满";
@@ -348,6 +387,19 @@ function pauseReason(node) {
 }
 
 function nodeRunState(node) {
+  if (node.kind === "group") {
+    const children = groupChildren(node);
+    if (!children.length) return { key: "idle", label: "未启动" };
+    if (children.some((child) => nodeRunState(child).key === "paused")) return { key: "paused", label: "暂停" };
+    if (children.some((child) => nodeRunState(child).key === "running")) return { key: "running", label: "启动" };
+    return { key: "idle", label: "未启动" };
+  }
+  if (nodeTypes[node.kind]?.adapter) {
+    if (storeTotal(node.outputStore) >= node.capacity) return { key: "paused", label: "暂停" };
+    return state.links.some((link) => link.fromNode === node.id || link.toNode === node.id) || state.powerLinks.some((link) => link.fromNode === node.id || link.toNode === node.id)
+      ? { key: "running", label: "启动" }
+      : { key: "idle", label: "未启动" };
+  }
   if (node.kind === "source") {
     if (node.reserve <= 0) return { key: "paused", label: "暂停" };
     return state.links.some((link) => link.fromNode === node.id)
@@ -390,11 +442,76 @@ function nodeRunState(node) {
   return { key: "idle", label: "未启动" };
 }
 
+function groupChildren(group) {
+  return state.nodes.filter((node) => node.groupId === group.id);
+}
+
+function adapterNodeInGroup(group, kind) {
+  return groupChildren(group).find((node) => node.kind === kind) || null;
+}
+
+function inferLinkResource(link) {
+  if (link?.resource) return link.resource;
+  const from = nodeById(link?.fromNode);
+  const to = nodeById(link?.toNode);
+  if (from?.kind === "source") return `${from.resource}_deposit`;
+  if (from?.kind === "miner") return from.miningResource;
+  if (activeRecipe(from)) return activeRecipe(from).output;
+  if (to?.kind === "miner") return Object.keys(from?.outputStore || {}).find((key) => key.endsWith("_deposit")) || null;
+  const recipe = activeRecipe(to);
+  if (recipe && Object.keys(recipe.inputs).length === 1) return Object.keys(recipe.inputs).find((key) => canReceiveResourceType(to, key, link.toPort)) || null;
+  return Object.keys(outputStoreFor(from || {}) || {}).find((key) => key !== "undefined") || null;
+}
+
+function rebuildGroupInterfaces(group) {
+  if (!group || group.kind !== "group") return createEmptyGroupData();
+  const data = group.groupData || createEmptyGroupData();
+  data.children = groupChildren(group).map((node) => node.id);
+  data.inputs = [];
+  data.outputs = [];
+  const inputAdapter = adapterNodeInGroup(group, "adapter_input");
+  const outputAdapter = adapterNodeInGroup(group, "adapter_output");
+  const powerAdapter = adapterNodeInGroup(group, "adapter_power");
+  if (inputAdapter) {
+    for (let port = 0; port < 3; port += 1) {
+      const internal = state.links.find((link) => link.fromNode === inputAdapter.id && link.fromPort === port);
+      const resource = inputAdapter.adapterResources?.outputs?.[port] || inferLinkResource(internal);
+      if (internal || resource) {
+        if (resource) inputAdapter.adapterResources.outputs[port] = resource;
+        data.inputs.push({ groupPort: port, adapterNodeId: inputAdapter.id, adapterPort: port, resource: resource || null });
+      }
+    }
+  }
+  if (outputAdapter) {
+    for (let port = 0; port < 3; port += 1) {
+      const internal = state.links.find((link) => link.toNode === outputAdapter.id && link.toPort === port);
+      const resource = outputAdapter.adapterResources?.inputs?.[port] || inferLinkResource(internal);
+      if (internal || resource) {
+        if (resource) outputAdapter.adapterResources.inputs[port] = resource;
+        data.outputs.push({ groupPort: port, adapterNodeId: outputAdapter.id, adapterPort: port, resource: resource || null });
+      }
+    }
+  }
+  data.powerInput = powerAdapter ? { adapterNodeId: powerAdapter.id } : null;
+  group.groupData = data;
+  return data;
+}
+
+function groupInputMap(group, port) {
+  return rebuildGroupInterfaces(group).inputs.find((item) => item.groupPort === port) || null;
+}
+
+function groupOutputMap(group, port) {
+  return rebuildGroupInterfaces(group).outputs.find((item) => item.groupPort === port) || null;
+}
+
 function activeInputs(node) {
+  if (node.kind === "group") return rebuildGroupInterfaces(node).inputs.length ? 3 : 0;
   return nodeTypes[node.kind].inputs;
 }
 
 function activeOutputs(node) {
+  if (node.kind === "group") return rebuildGroupInterfaces(node).outputs.length ? 3 : 0;
   return nodeTypes[node.kind].outputs;
 }
 
@@ -644,6 +761,17 @@ function focusContext() {
   return { selectedSet, nodeIds, logisticsLinkIds, powerLinkIds };
 }
 
+function visibleNode(node) {
+  if (state.activeGroupId) return node.groupId === state.activeGroupId;
+  return !node.groupId;
+}
+
+function visibleLink(link) {
+  const from = nodeById(link.fromNode);
+  const to = nodeById(link.toNode);
+  return Boolean(from && to && visibleNode(from) && visibleNode(to));
+}
+
 function focusRole(nodeId, focus) {
   if (!focus || !focus.nodeIds.has(nodeId)) return "";
   if (focus.selectedSet.has(nodeId)) return "聚焦";
@@ -682,7 +810,7 @@ function setDeviceTab(group) {
 function renderNodes() {
   nodesLayer.innerHTML = "";
   const focus = focusContext();
-  for (const node of state.nodes) {
+  for (const node of state.nodes.filter(visibleNode)) {
     const type = nodeTypes[node.kind];
     const runState = nodeRunState(node);
     const powerClass = powerVisualClass(node);
@@ -736,13 +864,15 @@ function powerVisualClass(node) {
 
 function portsHtml(node) {
   let html = "";
-  for (let i = 0; i < activeInputs(node); i += 1) {
+  const inputPorts = node.kind === "group" ? rebuildGroupInterfaces(node).inputs.map((item) => item.groupPort) : [...Array(activeInputs(node)).keys()];
+  const outputPorts = node.kind === "group" ? rebuildGroupInterfaces(node).outputs.map((item) => item.groupPort) : [...Array(activeOutputs(node)).keys()];
+  for (const i of inputPorts) {
     html += `<button class="port in ${isInputUsed(node.id, i) ? "used" : ""} ${node.kind === "warehouse" && !node.inputOpen[i] ? "closed" : ""}" data-node="${node.id}" data-side="in" data-index="${i}" style="top:${logisticsPortTop(i)}px" title="${portTitle(node, "in", i)}"></button>`;
   }
-  for (let i = 0; i < activeOutputs(node); i += 1) {
+  for (const i of outputPorts) {
     html += `<button class="port out ${isOutputUsed(node.id, i) ? "used" : ""} ${node.kind === "warehouse" && !node.outputOpen[i] ? "closed" : ""}" data-node="${node.id}" data-side="out" data-index="${i}" style="top:${logisticsPortTop(i)}px" title="${portTitle(node, "out", i)}"></button>`;
   }
-  if (nodeTypes[node.kind].powerIn) {
+  if (nodeTypes[node.kind].powerIn || (node.kind === "group" && rebuildGroupInterfaces(node).powerInput)) {
     html += `<button class="port power-in ${isPowerInputUsed(node.id) ? "used" : ""}" data-node="${node.id}" data-side="power-in" data-index="0" title="${portTitle(node, "power-in", 0)}"></button>`;
   }
   for (let i = 0; i < activePowerOutputs(node); i += 1) {
@@ -766,6 +896,17 @@ function powerOutputPortTop(node, index) {
 }
 
 function portTitle(node, side, index) {
+  if (node.kind === "group" && side === "in") {
+    const map = groupInputMap(node, index);
+    return map ? `分组输入 ${index + 1}：${map.resource ? resourceName(map.resource) : "待锁定资源"}` : `分组输入 ${index + 1}：未定义`;
+  }
+  if (node.kind === "group" && side === "out") {
+    const map = groupOutputMap(node, index);
+    return map ? `分组输出 ${index + 1}：${map.resource ? resourceName(map.resource) : "待锁定资源"}` : `分组输出 ${index + 1}：未定义`;
+  }
+  if (node.kind === "group" && side === "power-in") {
+    return "分组电力输入：连接到组内封装电力节点";
+  }
   if (side === "power-in") {
     const link = state.powerLinks.find((item) => item.toNode === node.id);
     return link ? `电力输入：${link.load || 0}/${link.capacity}` : "电力输入：未连接";
@@ -789,9 +930,11 @@ function renderLinks() {
   const fadePower = state.lineView === "logistics";
   const focus = focusContext();
   const logistics = state.links
+    .filter(visibleLink)
     .map((link) => ({ link, priority: isPriorityLogisticsLink(link, focus) ? 1 : 0 }))
     .sort((a, b) => a.priority - b.priority);
   const power = state.powerLinks
+    .filter(visibleLink)
     .map((link) => ({ link, priority: isPriorityPowerLink(link, focus) ? 1 : 0 }))
     .sort((a, b) => a.priority - b.priority);
   for (const item of logistics) {
@@ -967,6 +1110,13 @@ function renderInspector() {
   const runState = nodeRunState(node);
   const inputCount = state.links.filter((link) => link.toNode === node.id).length;
   const outputCount = state.links.filter((link) => link.fromNode === node.id).length;
+  const groupActions = node.kind === "group" ? `
+    <div class="cache-actions">
+      <button id="enter-group" type="button">进入分组</button>
+      <button id="ungroup-node" class="danger" type="button">取消分组</button>
+    </div>
+  ` : "";
+  const exitGroupAction = state.activeGroupId ? `<button class="inspector-action" id="exit-group" type="button">返回上级画布</button>` : "";
   inspector.innerHTML = `
     <div class="info-row"><span>名称</span><b>${nodeTitle(node)}</b></div>
     <div class="info-row"><span>定位</span><b>${Math.round(node.x)}, ${Math.round(node.y)}</b></div>
@@ -989,9 +1139,15 @@ function renderInspector() {
       <button data-cache-action="input" type="button">清空输入</button>
       <button data-cache-action="output" type="button">清空输出</button>
     </div>
+    ${node.kind === "group" ? groupSummaryHtml(node) : ""}
+    ${groupActions}
+    ${exitGroupAction}
     <button class="inspector-action danger" id="delete-selected-node" type="button">删除选中节点</button>
   `;
   document.querySelector("#delete-selected-node").addEventListener("click", deleteSelectedNode);
+  document.querySelector("#enter-group")?.addEventListener("click", () => enterGroup(node.id));
+  document.querySelector("#ungroup-node")?.addEventListener("click", () => ungroupNode(node.id));
+  document.querySelector("#exit-group")?.addEventListener("click", exitGroup);
   const recipeButton = document.querySelector("#open-recipe-dialog");
   if (recipeButton) recipeButton.addEventListener("click", () => openRecipeDialog(node.id));
   document.querySelectorAll("[data-warehouse-toggle]").forEach((button) => {
@@ -1037,9 +1193,176 @@ function renderMultiSelectionInspector() {
     <div class="info-row"><span>相关物流线</span><b>${logisticsLinks}</b></div>
     <div class="info-row"><span>相关电力线</span><b>${powerLinks}</b></div>
     <div class="info-row"><span>批量操作</span><b>拖动任一选中节点可整体移动</b></div>
+    <button class="inspector-action" id="create-group" type="button">创建封装分组</button>
+    ${state.activeGroupId ? `<button class="inspector-action" id="exit-group" type="button">返回上级画布</button>` : ""}
     <button class="inspector-action danger" id="delete-selected-node" type="button">删除选中节点</button>
   `;
   document.querySelector("#delete-selected-node").addEventListener("click", deleteSelectedNode);
+  document.querySelector("#create-group")?.addEventListener("click", createGroupFromSelection);
+  document.querySelector("#exit-group")?.addEventListener("click", exitGroup);
+}
+
+function groupSummaryHtml(group) {
+  const data = rebuildGroupInterfaces(group);
+  const inputs = data.inputs.map((item) => `${item.groupPort + 1}:${item.resource ? resourceName(item.resource) : "待锁定"}`).join(" / ") || "无";
+  const outputs = data.outputs.map((item) => `${item.groupPort + 1}:${item.resource ? resourceName(item.resource) : "待锁定"}`).join(" / ") || "无";
+  return `
+    <div class="info-row"><span>组内节点</span><b>${data.children.length}</b></div>
+    <div class="info-row"><span>分组输入</span><b>${inputs}</b></div>
+    <div class="info-row"><span>分组输出</span><b>${outputs}</b></div>
+    <div class="info-row"><span>分组电力</span><b>${data.powerInput ? "已声明" : "无"}</b></div>
+  `;
+}
+
+function createGroupFromSelection() {
+  if (state.activeGroupId) {
+    setStatus("第一版暂不支持在分组内部继续创建分组", "error");
+    return;
+  }
+  const ids = selectedNodeIds();
+  const selected = ids.map(nodeById).filter(Boolean);
+  if (selected.length < 2) {
+    setStatus("至少选择 2 个节点才能创建封装分组", "error");
+    return;
+  }
+  if (selected.some((node) => node.kind === "group")) {
+    setStatus("第一版暂不支持嵌套分组", "error");
+    return;
+  }
+  const adapterKinds = ["adapter_input", "adapter_output", "adapter_power"];
+  for (const kind of adapterKinds) {
+    if (selected.filter((node) => node.kind === kind).length > 1) {
+      setStatus("每个分组内同类封装节点最多只能有 1 个", "error");
+      return;
+    }
+  }
+  const minX = Math.min(...selected.map((node) => node.x));
+  const minY = Math.min(...selected.map((node) => node.y));
+  const maxX = Math.max(...selected.map((node) => node.x));
+  const maxY = Math.max(...selected.map((node) => node.y));
+  const group = createNodeRaw("group", null, Math.round((minX + maxX) / 2), Math.max(54, minY - 80));
+  group.groupId = state.activeGroupId;
+  group.capacity = DEVICE_CAPACITY;
+  group.groupData = createEmptyGroupData();
+  for (const node of selected) {
+    node.groupId = group.id;
+    node.localX = node.x - group.x;
+    node.localY = node.y - group.y;
+  }
+  const selectedSet = new Set(selected.map((node) => node.id));
+  let disconnected = 0;
+  for (const link of state.links) {
+    const fromInside = selectedSet.has(link.fromNode);
+    const toInside = selectedSet.has(link.toNode);
+    if (fromInside === toInside) continue;
+    const from = nodeById(link.fromNode);
+    const to = nodeById(link.toNode);
+    if (!fromInside && to?.kind === "adapter_input") {
+      link.toNode = group.id;
+    } else if (!toInside && from?.kind === "adapter_output") {
+      link.fromNode = group.id;
+    } else {
+      link.broken = true;
+      disconnected += 1;
+    }
+  }
+  let removedPower = 0;
+  for (const link of state.powerLinks) {
+    const fromInside = selectedSet.has(link.fromNode);
+    const toInside = selectedSet.has(link.toNode);
+    if (fromInside === toInside) continue;
+    const to = nodeById(link.toNode);
+    if (!fromInside && to?.kind === "adapter_power") {
+      link.toNode = group.id;
+    } else {
+      link.broken = true;
+      disconnected += 1;
+      removedPower += 1;
+    }
+  }
+  state.links = state.links.filter((link) => !link.broken);
+  state.powerLinks = state.powerLinks.filter((link) => !link.broken);
+  state.cableStock += removedPower;
+  rebuildGroupInterfaces(group);
+  setSingleSelection(group.id);
+  setStatus(`已创建封装分组：外部端口由组内封装节点控制${disconnected ? `，断开 ${disconnected} 条非封装跨界线` : ""}`, disconnected ? "error" : "ok");
+  render();
+}
+
+function enterGroup(groupId) {
+  const group = nodeById(groupId);
+  if (!group || group.kind !== "group") return;
+  state.activeGroupId = group.id;
+  clearSelection();
+  setStatus(`已进入 ${nodeTitle(group)}，封装节点决定外部接口`, "ok");
+  render();
+}
+
+function exitGroup() {
+  state.activeGroupId = null;
+  clearSelection();
+  setStatus("已返回主画布", "ok");
+  render();
+}
+
+function ungroupNode(groupId) {
+  const group = nodeById(groupId);
+  if (!group || group.kind !== "group") return false;
+  const data = rebuildGroupInterfaces(group);
+  let restored = 0;
+  let broken = 0;
+  for (const node of groupChildren(group)) {
+    node.x = group.x + (node.localX ?? node.x - group.x);
+    node.y = group.y + (node.localY ?? node.y - group.y);
+    node.groupId = group.groupId || null;
+    delete node.localX;
+    delete node.localY;
+  }
+  for (const link of state.links) {
+    if (link.toNode === group.id) {
+      const map = data.inputs.find((item) => item.groupPort === link.toPort);
+      if (map && nodeById(map.adapterNodeId)) {
+        link.toNode = map.adapterNodeId;
+        link.toPort = map.adapterPort;
+        restored += 1;
+      } else {
+        link.broken = true;
+        broken += 1;
+      }
+    }
+    if (link.fromNode === group.id) {
+      const map = data.outputs.find((item) => item.groupPort === link.fromPort);
+      if (map && nodeById(map.adapterNodeId)) {
+        link.fromNode = map.adapterNodeId;
+        link.fromPort = map.adapterPort;
+        restored += 1;
+      } else {
+        link.broken = true;
+        broken += 1;
+      }
+    }
+  }
+  for (const link of state.powerLinks) {
+    if (link.toNode === group.id) {
+      if (data.powerInput?.adapterNodeId && nodeById(data.powerInput.adapterNodeId)) {
+        link.toNode = data.powerInput.adapterNodeId;
+        restored += 1;
+      } else {
+        link.broken = true;
+        broken += 1;
+      }
+    }
+  }
+  state.links = state.links.filter((link) => !link.broken);
+  const removedPower = state.powerLinks.filter((link) => link.broken).length;
+  state.powerLinks = state.powerLinks.filter((link) => !link.broken);
+  state.cableStock += removedPower;
+  state.nodes = state.nodes.filter((node) => node.id !== group.id);
+  state.activeGroupId = group.groupId || null;
+  clearSelection();
+  setStatus(`已取消分组：恢复 ${restored} 条外部线${broken ? `，断开 ${broken} 条缺失接口线` : ""}`, broken ? "error" : "ok");
+  render();
+  return true;
 }
 
 function recipeControlHtml(node) {
@@ -1269,6 +1592,14 @@ function ensureRecipeForResource(node, resource) {
 
 function canReceiveResourceType(node, resource, port = 0) {
   if (!node || !resource) return false;
+  if (node.kind === "group") {
+    const map = groupInputMap(node, port);
+    return Boolean(map && (!map.resource || map.resource === resource));
+  }
+  if (nodeTypes[node.kind]?.adapter) {
+    const locked = node.adapterResources?.inputs?.[port] || node.adapterResources?.outputs?.[port];
+    return !locked || locked === resource;
+  }
   if (node.kind === "miner") return resource.endsWith("_deposit");
   if (node.kind === "warehouse") {
     if (!node.inputOpen[port]) return false;
@@ -1310,7 +1641,10 @@ function warehouseControlHtml(node) {
 
 function renderLinkInspector() {
   if (!state.selectedLinkId) {
-    inspector.innerHTML = "当前未选择节点";
+    inspector.innerHTML = state.activeGroupId
+      ? `<button class="inspector-action" id="exit-group" type="button">返回上级画布</button>`
+      : "当前未选择节点";
+    document.querySelector("#exit-group")?.addEventListener("click", exitGroup);
     return;
   }
   const link = state.selectedLinkType === "power"
@@ -1720,6 +2054,10 @@ function renderAlerts() {
 function outputStoreFor(node) {
   if (node.kind === "source") return {};
   if (node.kind === "warehouse") return node.inputStore;
+  if (node.kind === "group") {
+    const outputAdapter = adapterNodeInGroup(node, "adapter_output");
+    return outputAdapter?.outputStore || {};
+  }
   return node.outputStore;
 }
 
@@ -1733,10 +2071,22 @@ function incomingAmount(nodeId, resource = null) {
   }, 0);
 }
 
+function groupAdapterCanReceive(group, resource, amount, port, includeIncoming = false) {
+  const map = groupInputMap(group, port);
+  const adapter = map ? nodeById(map.adapterNodeId) : null;
+  if (!adapter) return false;
+  if (map.resource && map.resource !== resource) return false;
+  return canReceive(adapter, resource, amount, map.adapterPort, includeIncoming);
+}
+
 function canReceive(node, resource, amount, port = 0, includeIncoming = false) {
   if (!canReceiveResourceType(node, resource, port)) return false;
+  if (node.kind === "group") return groupAdapterCanReceive(node, resource, amount, port, includeIncoming);
   const incomingTotal = includeIncoming ? incomingAmount(node.id) : 0;
   const incomingResource = includeIncoming ? incomingAmount(node.id, resource) : 0;
+  if (nodeTypes[node.kind]?.adapter) {
+    return storeTotal(node.inputStore) + incomingTotal + amount <= node.capacity && storeTotal(node.outputStore) < node.capacity;
+  }
   if (node.kind === "miner") {
     if (storeTotal(node.inputStore) + incomingTotal + amount > node.capacity) return false;
     const existing = Object.keys(node.inputStore)[0];
@@ -1760,11 +2110,26 @@ function canReceive(node, resource, amount, port = 0, includeIncoming = false) {
 }
 
 function receiveResource(node, resource, amount, port = 0) {
+  if (node.kind === "group") {
+    const map = groupInputMap(node, port);
+    const adapter = map ? nodeById(map.adapterNodeId) : null;
+    if (adapter) receiveResource(adapter, resource, amount, map.adapterPort);
+    return;
+  }
+  lockAdapterResource(node, "inputs", port, resource);
   ensureRecipeForResource(node, resource);
   if (node.kind === "warehouse" && !node.warehouseResource) {
     node.warehouseResource = resource;
   }
   addStore(node.inputStore, resource, amount);
+}
+
+function lockAdapterResource(node, side, port, resource) {
+  if (!nodeTypes[node?.kind]?.adapter || !resource) return;
+  node.adapterResources ||= createAdapterResources(node.kind);
+  if (!node.adapterResources[side][port]) node.adapterResources[side][port] = resource;
+  const otherSide = side === "inputs" ? "outputs" : "inputs";
+  if (!node.adapterResources[otherSide][port]) node.adapterResources[otherSide][port] = resource;
 }
 
 function isOutputUsed(nodeId, port) {
@@ -1892,9 +2257,10 @@ function canvasPoint(event) {
 
 function nearestInputPort() {
   let best = null;
-  for (const node of state.nodes) {
-    const count = state.dragLink?.type === "power" ? (nodeTypes[node.kind].powerIn ? 1 : 0) : activeInputs(node);
+  for (const node of state.nodes.filter(visibleNode)) {
+    const count = state.dragLink?.type === "power" ? ((nodeTypes[node.kind].powerIn || (node.kind === "group" && rebuildGroupInterfaces(node).powerInput)) ? 1 : 0) : activeInputs(node);
     for (let port = 0; port < count; port += 1) {
+      if (state.dragLink?.type !== "power" && node.kind === "group" && !groupInputMap(node, port)) continue;
       const side = state.dragLink?.type === "power" ? "power-in" : "in";
       const point = portPosition(node, side, port);
       const distance = Math.hypot(point.x - state.pointer.x, point.y - state.pointer.y);
@@ -1946,12 +2312,12 @@ function createLink(toNode, toPort) {
     render();
     return;
   }
-  if (from?.kind === "source" && to?.kind !== "miner") {
+  if (from?.kind === "source" && !["miner", "adapter_input", "group"].includes(to?.kind)) {
     setStatus("矿源必须先连接采矿机", "error");
     render();
     return;
   }
-  if (to?.kind === "miner" && from?.kind !== "source") {
+  if (to?.kind === "miner" && !["source", "adapter_input", "group"].includes(from?.kind)) {
     setStatus("采矿机输入口只能连接矿源", "error");
     render();
     return;
@@ -1990,7 +2356,8 @@ function createPowerLink(toNode) {
   }
   const from = nodeById(drag.fromNode);
   const to = nodeById(toNode);
-  if (!nodeTypes[from?.kind]?.powerOut || !nodeTypes[to?.kind]?.powerIn) {
+  const toCanReceivePower = nodeTypes[to?.kind]?.powerIn || (to?.kind === "group" && rebuildGroupInterfaces(to).powerInput);
+  if (!nodeTypes[from?.kind]?.powerOut || !toCanReceivePower) {
     setStatus("电力线只能从电力输出口连接到电力输入口", "error");
     render();
     return;
@@ -2072,6 +2439,11 @@ function forceDeleteNodes(nodeIds) {
 
 function forceDeleteNode(nodeId, shouldRender = true) {
   const node = nodeById(nodeId);
+  if (node?.kind === "group") {
+    for (const child of groupChildren(node)) {
+      forceDeleteNode(child.id, false);
+    }
+  }
   if (node && node.kind !== "source" && state.inventory[node.kind] !== undefined) {
     state.inventory[node.kind] += 1;
   }
@@ -2107,6 +2479,7 @@ function simulate(now) {
     }
     runMiner(node, dt);
     runIndustry(node, dt);
+    runAdapter(node, dt);
   }
 
   for (const link of state.links) {
@@ -2141,7 +2514,7 @@ function runPower(dt) {
   while (queue.length) {
     const id = queue.shift();
     for (const link of state.powerLinks.filter((item) => item.fromNode === id)) {
-      const target = nodeById(link.toNode);
+      const target = nodeById(effectivePowerTargetId(link));
       if (!target || visited.has(target.id)) continue;
       visited.add(target.id);
       poweredIds.add(target.id);
@@ -2162,9 +2535,9 @@ function runPower(dt) {
     const deliverQueue = [...activePowerSources];
     const deliveredVisited = new Set(deliverQueue);
     while (deliverQueue.length) {
-      const id = deliverQueue.shift();
+    const id = deliverQueue.shift();
       for (const link of state.powerLinks.filter((item) => item.fromNode === id && !item.overloaded)) {
-        const target = nodeById(link.toNode);
+        const target = nodeById(effectivePowerTargetId(link));
         if (!target || deliveredVisited.has(target.id)) continue;
         deliveredVisited.add(target.id);
         deliveredIds.add(target.id);
@@ -2186,9 +2559,15 @@ function runPower(dt) {
 
 function updatePowerLinkLoads() {
   for (const link of state.powerLinks) {
-    link.load = downstreamPowerDemand(link.toNode, new Set([link.fromNode]));
+    link.load = downstreamPowerDemand(effectivePowerTargetId(link), new Set([link.fromNode]));
     link.overloaded = link.load > link.capacity;
   }
+}
+
+function effectivePowerTargetId(link) {
+  const target = nodeById(link.toNode);
+  if (target?.kind !== "group") return link.toNode;
+  return rebuildGroupInterfaces(target).powerInput?.adapterNodeId || link.toNode;
 }
 
 function downstreamPowerDemand(nodeId, visited) {
@@ -2243,15 +2622,19 @@ function emitPackets(link, dt) {
   const to = nodeById(link.toNode);
   if (!from || !to || link.packets.length >= LOGISTICS_PACKET_LIMIT) return;
   if (from.kind === "warehouse" && !from.outputOpen[link.fromPort]) return;
+  if (from.kind === "group" && !groupOutputMap(from, link.fromPort)) return;
   const store = outputStoreFor(from);
   if (link.resource && !canReceive(to, link.resource, 1, link.toPort, true) && link.packets.length === 0) {
     link.resource = null;
   }
+  const groupOutput = from.kind === "group" ? groupOutputMap(from, link.fromPort) : null;
+  const lockedOutput = nodeTypes[from.kind]?.adapter ? from.adapterResources?.outputs?.[link.fromPort] : null;
   const resource = from.kind === "source"
     ? `${from.resource}_deposit`
-    : link.resource || Object.keys(store).find((key) => store[key] >= 1 && canReceive(to, key, 1, link.toPort, true));
+    : (groupOutput?.resource || lockedOutput || link.resource || Object.keys(store).find((key) => store[key] >= 1 && canReceive(to, key, 1, link.toPort, true)));
   if (!resource) return;
   if (!link.resource) link.resource = resource;
+  lockAdapterResource(from, "outputs", link.fromPort, link.resource);
   if (resource !== link.resource) return;
   if (!canReceive(to, link.resource, 1, link.toPort, true)) return;
 
@@ -2276,6 +2659,11 @@ function emitPackets(link, dt) {
 
 function hasAvailableOutput(node, store, resource) {
   if (node.kind === "source") return node.reserve >= 1 && `${node.resource}_deposit` === resource;
+  if (node.kind === "group") {
+    const map = groupOutputMap(node, state.links.find((link) => link.fromNode === node.id && link.resource === resource)?.fromPort ?? 0);
+    const adapter = map ? nodeById(map.adapterNodeId) : adapterNodeInGroup(node, "adapter_output");
+    return Boolean(adapter && (adapter.outputStore[resource] || 0) >= 1);
+  }
   return (store[resource] || 0) >= 1;
 }
 
@@ -2284,7 +2672,25 @@ function consumeOutput(node, store, resource) {
     node.reserve = Math.max(0, node.reserve - 1);
     return;
   }
+  if (node.kind === "group") {
+    const outputAdapter = adapterNodeInGroup(node, "adapter_output");
+    if (outputAdapter) addStore(outputAdapter.outputStore, resource, -1);
+    return;
+  }
   addStore(store, resource, -1);
+}
+
+function runAdapter(node, dt) {
+  if (!nodeTypes[node.kind]?.adapter) return;
+  const capacity = node.capacity || DEVICE_CAPACITY;
+  const moveBudget = Math.max(1, dt * 24);
+  for (const resource of Object.keys(node.inputStore)) {
+    const amount = Math.min(node.inputStore[resource], moveBudget, capacity - storeTotal(node.outputStore));
+    if (amount <= 0) continue;
+    addStore(node.inputStore, resource, -amount);
+    addStore(node.outputStore, resource, amount);
+    node.status = "接口转发中";
+  }
 }
 
 function runMiner(node, dt) {
@@ -2485,6 +2891,7 @@ function loadSaveData(data, name = "本地存档") {
   state.selectedIds = [];
   state.selectedLinkId = null;
   state.selectedLinkType = null;
+  state.activeGroupId = null;
   nextId = data.nextId || Math.max(1, ...state.nodes.map((node) => Number(node.id.replace("node-", "")) || 1)) + 1;
   saveDialog.close();
   setStatus(`已读取存档：${name}`, "ok");
@@ -2582,6 +2989,9 @@ function hydrateNode(node) {
     status: "待机",
     powered: false,
     generating: false,
+    groupId: null,
+    groupData: node.kind === "group" ? createEmptyGroupData() : null,
+    adapterResources: createAdapterResources(node.kind),
     ...node,
     capacity: node.kind === "warehouse"
       ? Math.max(node.capacity || 0, WAREHOUSE_CAPACITY)
@@ -2604,7 +3014,7 @@ function buildDemoLine() {
   state.nodes = [];
   state.links = [];
   state.powerLinks = [];
-  state.inventory = { miner: 4, furnace: 4, kiln: 5, caster: 5, assembler: 5, generator: 0, pole: 4, warehouse: 4 };
+  state.inventory = { miner: 4, furnace: 4, kiln: 5, caster: 5, assembler: 5, generator: 0, pole: 4, warehouse: 4, adapter_input: 3, adapter_output: 3, adapter_power: 2 };
   state.cableStock = 12;
   state.claimedGoalRewards = {};
   state.productionStats = {};
@@ -2755,7 +3165,7 @@ canvas.addEventListener("pointerdown", (event) => {
     moved = true;
     state.selectionBox.current = canvasPoint(moveEvent);
     const rect = selectionRect(state.selectionBox.start, state.selectionBox.current);
-    const boxedIds = state.nodes.filter((node) => nodeIntersectsRect(node, rect)).map((node) => node.id);
+    const boxedIds = state.nodes.filter((node) => visibleNode(node) && nodeIntersectsRect(node, rect)).map((node) => node.id);
     setMultiSelection([...baseSelection, ...boxedIds]);
     state.selectionBox = { start: startPoint, current: canvasPoint(moveEvent) };
     render();
@@ -2808,6 +3218,7 @@ document.querySelector("#clear-all").addEventListener("click", () => {
   state.selectedLinkId = null;
   state.selectedLinkType = null;
   state.selectedLinkType = null;
+  state.activeGroupId = null;
   setStatus("已清空节点");
   render();
 });

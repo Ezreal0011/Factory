@@ -462,6 +462,18 @@ button {
   animation: node-paused-warn 0.9s steps(2, end) infinite;
 }
 
+.node[data-id] .node-header span {
+  min-width: 0;
+}
+
+.node.state-running .node-header i {
+  box-shadow: 0 0 8px currentColor;
+}
+
+.node:has(.port.power-in) .node-header {
+  background: linear-gradient(90deg, rgba(255, 228, 92, 0.08), transparent 70%);
+}
+
 @keyframes node-running-pulse {
   50% {
     box-shadow: 0 0 0 2px rgba(63, 224, 131, 0.26), 0 0 16px rgba(63, 224, 131, 0.18), 0 14px 24px rgba(0, 0, 0, 0.28);
@@ -1846,6 +1858,11 @@ dialog button.danger {
 .device-items button[data-group="电力"] {
   background: #211e11;
   border-left-color: #ffe66d;
+}
+
+.device-items button[data-group="封装"] {
+  background: #102238;
+  border-left-color: #84c7ff;
 }
 
 .device-bar b {
