@@ -455,8 +455,33 @@ function sourceReserveColor(node) {
 }
 
 function nodeDisplayTitle(node) {
+  return nodeTitle(node);
+}
+
+function nodeStatusTags(node, runState = nodeRunState(node)) {
+  const tags = [];
+  if (runState.key === "paused") tags.push({ text: "暂停", type: "paused", priority: "core" });
+  if (runState.key === "running") tags.push({ text: "运行", type: "running", priority: "core" });
   const reason = pauseReason(node);
-  return reason ? `${nodeTitle(node)}【${reason}】` : nodeTitle(node);
+  if (reason) tags.push({ text: reason, type: "reason", priority: "detail" });
+  if (nodeTypes[node.kind]?.powerIn) {
+    tags.push({ text: node.powered ? "已供电" : "未供电", type: node.powered ? "power-on" : "power-off", priority: "detail" });
+  }
+  if (node.kind === "source" && node.reserve <= 0) tags.push({ text: "消耗殆尽", type: "danger", priority: "detail" });
+  return tags;
+}
+
+function statusTagsHtml(node, runState) {
+  const tags = nodeStatusTags(node, runState);
+  if (!tags.length) return "";
+  const visible = tags.slice(0, 3);
+  const overflow = tags.length - visible.length;
+  return `
+    <div class="node-tags" title="${tags.map((tag) => tag.text).join(" / ")}">
+      ${visible.map((tag) => `<span class="node-tag ${tag.type}" data-priority="${tag.priority}">${tag.text}</span>`).join("")}
+      ${overflow > 0 ? `<span class="node-tag overflow" data-priority="detail">+${overflow}</span>` : ""}
+    </div>
+  `;
 }
 
 function nodeById(id) {
@@ -637,6 +662,46 @@ function groupOutputMap(group, port) {
   return rebuildGroupInterfaces(group).outputs.find((item) => item.groupPort === port) || null;
 }
 
+function groupInterfaceRows(items, side) {
+  return [0, 1, 2].map((port) => {
+    const item = items.find((entry) => entry.groupPort === port);
+    const resource = item?.resource || null;
+    const name = resource ? resourceName(resource) : "待绑定";
+    const color = resource ? resourceColor(resource) : "#5e778a";
+    return `
+      <div class="group-interface-row ${resource ? "bound" : "empty"}" title="${side} ${port + 1}: ${name}">
+        <b>${side} ${port + 1}</b>
+        <i style="background:${color}"></i>
+        <span>${name}</span>
+      </div>
+    `;
+  }).join("");
+}
+
+function groupInterfacePanelHtml(data) {
+  const inputCount = data.inputs.length;
+  const outputCount = data.outputs.length;
+  const powerText = data.powerInput ? "PWR 接入" : "PWR 未接入";
+  return `
+    <div class="group-interface-summary mid-layer">
+      <span>IN ${inputCount}</span>
+      <span>OUT ${outputCount}</span>
+      <span>${data.powerInput ? "PWR" : "NO PWR"}</span>
+    </div>
+    <div class="group-interface-panel">
+      <div class="group-interface-column input">
+        <strong>输入接口</strong>
+        ${groupInterfaceRows(data.inputs, "IN")}
+      </div>
+      <div class="group-interface-column output">
+        <strong>输出接口</strong>
+        ${groupInterfaceRows(data.outputs, "OUT")}
+      </div>
+    </div>
+    <div class="group-power-chip ${data.powerInput ? "on" : "off"}">${powerText}</div>
+  `;
+}
+
 function activeInputs(node) {
   if (node.kind === "group") return rebuildGroupInterfaces(node).inputs.length ? 3 : 0;
   return nodeTypes[node.kind].inputs;
@@ -651,16 +716,21 @@ function activePowerOutputs(node) {
   return nodeTypes[node.kind].powerOutputs || (nodeTypes[node.kind].powerOut ? 1 : 0);
 }
 
+function nodeVisualWidth(node) {
+  return node?.kind === "group" ? 236 : 166;
+}
+
 function portPosition(node, side, index) {
-  if (side === "power-in") return { x: node.x + 139, y: node.y - 1 };
+  const width = nodeVisualWidth(node);
+  if (side === "power-in") return { x: node.x + width - 27, y: node.y - 1 };
   if (side === "power-out") {
     const count = activePowerOutputs(node);
     const top = count > 1 ? 58 + index * 24 : 102;
-    return { x: node.x + 174, y: node.y + top };
+    return { x: node.x + width + 8, y: node.y + top };
   }
   const top = 48 + index * 22;
   return {
-    x: node.x + (side === "in" ? -8 : 174),
+    x: node.x + (side === "in" ? -8 : width + 8),
     y: node.y + top + 7
   };
 }
@@ -966,6 +1036,7 @@ function renderNodes() {
       </div>
       <div class="node-body">
         ${relationRole ? `<div class="relation-badge">${relationRole}</div>` : ""}
+        ${statusTagsHtml(node, runState)}
         <div class="node-desc detail-layer">${type.desc}</div>
         <div class="run-state ${runState.key}">运行状态 ${runState.label}</div>
         ${activeRecipe(node) ? `
@@ -1034,6 +1105,7 @@ function renderGroupNodeLegacyUnused(node, focus) {
       <i></i>
     </div>
     <div class="node-body">
+      ${statusTagsHtml(node, runState)}
       <div class="node-desc detail-layer">${nodeTypes.group.desc}</div>
       <div class="run-state ${runState.key}">运行状态 ${runState.label}</div>
       <div class="node-recipe mid-layer">组内 ${data.children.length} 节点</div>
@@ -1068,6 +1140,50 @@ function renderGroupNode(node, focus) {
       <div class="run-state ${runState.key}">运行状态 ${runState.label}</div>
       <div class="node-recipe mid-layer">组内 ${data.children.length} 节点</div>
       <div class="node-store detail-layer"><span>接口</span><div>${inputText} / ${outputText} / ${powerText}</div></div>
+    </div>
+    ${portsHtml(node)}
+  `;
+  element.addEventListener("pointerdown", (event) => {
+    const now = performance.now();
+    const repeatedClick = state.lastGroupClick.id === node.id && now - state.lastGroupClick.at < 900;
+    state.lastGroupClick = { id: node.id, at: now };
+    if (event.detail >= 2 || repeatedClick) {
+      state.lastGroupClick = { id: null, at: 0 };
+      event.preventDefault();
+      event.stopPropagation();
+      enterGroup(node.id);
+      return;
+    }
+    startNodeDrag(event);
+  });
+  element.addEventListener("dblclick", (event) => {
+    event.stopPropagation();
+    enterGroup(node.id);
+  });
+  nodesLayer.appendChild(element);
+}
+
+function renderGroupNode(node, focus) {
+  const runState = nodeRunState(node);
+  const dimClass = focus && !focus.nodeIds.has(node.id) ? "dimmed-node" : "";
+  const data = rebuildGroupInterfaces(node);
+  const element = document.createElement("article");
+  element.className = `node group-node state-${runState.key} ${dimClass} ${isNodeSelected(node.id) ? "selected" : ""}`;
+  element.dataset.id = node.id;
+  element.style.left = `${node.x}px`;
+  element.style.top = `${node.y}px`;
+  element.innerHTML = `
+    <div class="node-header">
+      <span>${nodeDisplayTitle(node)}</span>
+      <i></i>
+    </div>
+    <div class="node-body">
+      ${statusTagsHtml(node, runState)}
+      <div class="group-node-meta">
+        <span>组内 ${data.children.length} 节点</span>
+        <span>${runState.label}</span>
+      </div>
+      ${groupInterfacePanelHtml(data)}
     </div>
     ${portsHtml(node)}
   `;
