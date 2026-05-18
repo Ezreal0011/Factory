@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>工业网络游戏 - M8 监控 UI 系统</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-mark"></span>
+          <div>
+            <strong>机械工业时代</strong>
+            <small>M8 工业监控 UI</small>
+          </div>
+        </div>
+        <div id="status" class="status">工业控制台持续监控节点、资源、电网、物流和警报</div>
+      </header>
+
+      <main class="main">
+        <section class="canvas-shell">
+          <div class="toolbar">
+            <button class="mode" data-mode="logistics" type="button">物流线</button>
+            <button class="mode" data-mode="power" type="button">电力线</button>
+            <button id="toggle-logistics" type="button">显隐物流</button>
+            <button id="toggle-power" type="button">显隐电力</button>
+            <button id="show-all-lines" class="active" type="button">显示所有线</button>
+            <button id="auto-layout" type="button">整理布局</button>
+            <button id="demo-line" type="button">测试链路</button>
+            <button id="save-game" type="button">存档</button>
+            <button id="load-game" type="button">读档</button>
+            <button id="clear-lines" type="button">清除连线</button>
+            <button id="delete-selected-link" type="button" disabled>删除选中连线</button>
+            <button id="clear-all" type="button">清空节点</button>
+          </div>
+          <div id="canvas" class="canvas">
+            <svg id="links" class="links" aria-hidden="true"></svg>
+            <div id="nodes" class="nodes"></div>
+          </div>
+        </section>
+
+        <aside class="inspector">
+          <section class="console-panel goal-panel">
+            <h2>当前目标</h2>
+            <div id="goal-panel"></div>
+          </section>
+
+          <section class="console-panel">
+            <h2>当前节点</h2>
+            <div id="inspector-content" class="muted">当前未选择节点</div>
+          </section>
+
+          <section class="console-panel">
+            <h2>资源总览</h2>
+            <div id="resource-overview" class="metric-grid"></div>
+          </section>
+
+          <section class="console-panel">
+            <h2>电网监控</h2>
+            <div id="power-overview"></div>
+          </section>
+
+          <section class="console-panel">
+            <h2>物流监控</h2>
+            <div id="logistics-overview"></div>
+          </section>
+
+          <section class="console-panel">
+            <h2>警报系统</h2>
+            <div class="alert-filters">
+              <button class="active" data-alert-filter="all" type="button">全部</button>
+              <button data-alert-filter="critical" type="button">严重</button>
+              <button data-alert-filter="warn" type="button">警告</button>
+            </div>
+            <div id="alerts"></div>
+          </section>
+        </aside>
+      </main>
+
+      <footer class="device-bar">
+        <div class="device-tabs">
+          <button class="active" data-device-tab="资源" type="button">资源</button>
+          <button data-device-tab="物流" type="button">物流</button>
+          <button data-device-tab="生产" type="button">生产</button>
+          <button data-device-tab="电力" type="button">电力</button>
+          <button data-device-tab="仓储" type="button">仓储</button>
+        </div>
+        <div class="device-items">
+          <button data-group="资源" data-kind="source" data-resource="iron_ore" type="button">铁矿源 <b>∞</b></button>
+          <button data-group="资源" data-kind="source" data-resource="copper_ore" type="button">铜矿源 <b>∞</b></button>
+          <button data-group="资源" data-kind="source" data-resource="coal" type="button">煤矿源 <b>∞</b></button>
+          <button data-group="资源" data-kind="source" data-resource="sand" type="button">沙矿源 <b>∞</b></button>
+          <button data-group="物流" data-kind="miner" type="button">采矿机 <b>5</b></button>
+          <button data-group="生产" data-kind="furnace" type="button">熔炉 <b>5</b></button>
+          <button data-group="生产" data-kind="kiln" type="button">高温熔炼炉 <b>5</b></button>
+          <button data-group="生产" data-kind="caster" type="button">铸造厂 <b>5</b></button>
+          <button data-group="生产" data-kind="assembler" type="button">组装工厂 <b>5</b></button>
+          <button data-group="电力" data-kind="generator" type="button">发电机 <b>1</b></button>
+          <button data-group="电力" data-kind="pole" type="button">电杆 <b>4</b></button>
+          <button data-group="仓储" data-kind="warehouse" type="button">仓库 <b>5</b></button>
+          <button data-group="电力" class="stock-only" type="button" disabled>线缆 <b id="cable-stock">12</b></button>
+        </div>
+      </footer>
+    </div>
+
+    <dialog id="warehouse-dialog">
+      <form method="dialog">
+        <p>仓库内仍存在资源。是否强制拆除？资源将被销毁。</p>
+        <menu>
+          <button value="cancel" type="submit">取消</button>
+          <button value="force" class="danger" type="submit">强制拆除</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <dialog id="save-dialog" class="save-dialog">
+      <div class="save-dialog-head">
+        <div>
+          <h2 id="save-dialog-title">存档管理</h2>
+          <p id="save-dialog-subtitle"></p>
+        </div>
+        <button id="close-save-dialog" type="button">关闭</button>
+      </div>
+      <div class="save-create-row">
+        <input id="save-name-input" maxlength="24" placeholder="输入存档名称" />
+        <button id="create-save-slot" type="button">新建存档</button>
+      </div>
+      <div id="save-slot-list" class="save-slot-list"></div>
+    </dialog>
+
+    <dialog id="recipe-dialog" class="recipe-dialog">
+      <div class="recipe-dialog-head">
+        <div>
+          <div class="recipe-dialog-kicker">RECIPE TERMINAL</div>
+          <h2>选择配方</h2>
+          <p id="recipe-dialog-subtitle"></p>
+        </div>
+        <button id="close-recipe-dialog" class="recipe-close-button" type="button">×</button>
+      </div>
+      <div id="recipe-dialog-content" class="recipe-dialog-content"></div>
+    </dialog>
+
+    <script src="./app.js"></script>
+  </body>
+</html>
