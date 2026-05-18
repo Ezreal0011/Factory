@@ -92,6 +92,7 @@ const LOGISTICS_PACKET_LIMIT = 10;
 const LOGISTICS_WARN_PACKETS = 7;
 const LOGISTICS_WARN_EFFICIENCY = 80;
 const LOGISTICS_DANGER_EFFICIENCY = 50;
+const ADAPTER_PORT_CAPACITY = 1;
 const SAVE_INDEX_KEY = "factory-save-slots-v1";
 const LEGACY_SAVE_KEY = "factory-save-v1";
 
@@ -111,6 +112,7 @@ const state = {
   lineView: "all",
   alertFilter: "all",
   lastMonitorRender: 0,
+  lastGroupClick: { id: null, at: 0 },
   pointer: { x: 0, y: 0 },
   viewport: { x: 0, y: 0, scale: 1 },
   activeGroupId: null,
@@ -248,6 +250,117 @@ function createAdapterResources(kind) {
   };
 }
 
+function createAdapterPortStores(kind) {
+  if (!nodeTypes[kind]?.adapter) return null;
+  return {
+    inputs: [{}, {}, {}],
+    outputs: [{}, {}, {}]
+  };
+}
+
+function ensureAdapterPortStores(node) {
+  if (!nodeTypes[node?.kind]?.adapter) return null;
+  node.adapterPortStores ||= createAdapterPortStores(node.kind);
+  for (const side of ["inputs", "outputs"]) {
+    if (!Array.isArray(node.adapterPortStores[side])) node.adapterPortStores[side] = [{}, {}, {}];
+    for (let port = 0; port < 3; port += 1) {
+      node.adapterPortStores[side][port] ||= {};
+    }
+  }
+  return node.adapterPortStores;
+}
+
+function adapterPortStore(node, side, port) {
+  const stores = ensureAdapterPortStores(node);
+  return stores?.[side]?.[port] || {};
+}
+
+function adapterHasBlockedOutput(node) {
+  if (!nodeTypes[node?.kind]?.adapter) return false;
+  ensureAdapterPortStores(node);
+  return node.adapterPortStores.outputs.some((store) => storeTotal(store) >= ADAPTER_PORT_CAPACITY);
+}
+
+function firstStoreResource(store) {
+  return Object.keys(store || {}).find((key) => key !== "undefined" && (store[key] || 0) > 0.001) || null;
+}
+
+function subtractStore(target, source) {
+  for (const [resource, amount] of Object.entries(source || {})) {
+    addStore(target, resource, -amount);
+  }
+}
+
+function clearAdapterPort(node, port, options = {}) {
+  if (!nodeTypes[node?.kind]?.adapter) return;
+  const { keepResource = null, clearPackets = true } = options;
+  ensureAdapterPortStores(node);
+  subtractStore(node.inputStore, node.adapterPortStores.inputs[port]);
+  subtractStore(node.outputStore, node.adapterPortStores.outputs[port]);
+  node.adapterPortStores.inputs[port] = {};
+  node.adapterPortStores.outputs[port] = {};
+  node.adapterResources ||= createAdapterResources(node.kind);
+  node.adapterResources.inputs[port] = keepResource;
+  node.adapterResources.outputs[port] = keepResource;
+  if (clearPackets) {
+    for (const link of state.links) {
+      if ((link.toNode === node.id && link.toPort === port) || (link.fromNode === node.id && link.fromPort === port)) {
+        link.packets = [];
+        link.resource = keepResource;
+        link.emitBuffer = 0;
+      }
+    }
+  }
+}
+
+function clearGroupPortPackets(group, side, port, resource = null) {
+  if (!group || group.kind !== "group") return;
+  for (const link of state.links) {
+    const matches = side === "input"
+      ? link.toNode === group.id && link.toPort === port
+      : link.fromNode === group.id && link.fromPort === port;
+    if (!matches) continue;
+    link.packets = [];
+    link.resource = resource;
+    link.emitBuffer = 0;
+  }
+}
+
+function rebindAdapterPort(node, port, resource) {
+  if (!nodeTypes[node?.kind]?.adapter || !resource) return;
+  node.adapterResources ||= createAdapterResources(node.kind);
+  const current = node.adapterResources.inputs[port] || node.adapterResources.outputs[port];
+  if (current && current !== resource) {
+    clearAdapterPort(node, port, { keepResource: resource });
+  } else {
+    node.adapterResources.inputs[port] = resource;
+    node.adapterResources.outputs[port] = resource;
+  }
+}
+
+function adapterParentGroup(node) {
+  return node?.groupId ? nodeById(node.groupId) : null;
+}
+
+function pruneAdapterPortBindings() {
+  for (const node of state.nodes) {
+    if (!nodeTypes[node.kind]?.adapter) continue;
+    const group = adapterParentGroup(node);
+    for (let port = 0; port < 3; port += 1) {
+      let hasInputSide = state.links.some((link) => link.toNode === node.id && link.toPort === port);
+      let hasOutputSide = state.links.some((link) => link.fromNode === node.id && link.fromPort === port);
+      if (group && node.kind === "adapter_input") {
+        hasInputSide ||= state.links.some((link) => link.toNode === group.id && link.toPort === port);
+      }
+      if (group && node.kind === "adapter_output") {
+        hasOutputSide ||= state.links.some((link) => link.fromNode === group.id && link.fromPort === port);
+      }
+      if (!hasInputSide && !hasOutputSide) clearAdapterPort(node, port, { clearPackets: false });
+    }
+  }
+  for (const group of state.nodes.filter((node) => node.kind === "group")) rebuildGroupInterfaces(group);
+}
+
 function addNode(kind, resource = null) {
   if (kind !== "source" && state.inventory[kind] !== undefined && (state.inventory[kind] || 0) <= 0) {
     setStatus(`${nodeTypes[kind].name} 库存不足`, "error");
@@ -281,6 +394,7 @@ function addNode(kind, resource = null) {
     groupId: state.activeGroupId,
     groupData: kind === "group" ? createEmptyGroupData() : null,
     adapterResources: createAdapterResources(kind),
+    adapterPortStores: createAdapterPortStores(kind),
     capacity: kind === "warehouse" ? WAREHOUSE_CAPACITY : DEVICE_CAPACITY
   };
   node.x = Math.min(node.x, rect.width - 210);
@@ -319,6 +433,7 @@ function createNodeRaw(kind, resource, x, y) {
     groupId: null,
     groupData: kind === "group" ? createEmptyGroupData() : null,
     adapterResources: createAdapterResources(kind),
+    adapterPortStores: createAdapterPortStores(kind),
     capacity: kind === "warehouse" ? WAREHOUSE_CAPACITY : DEVICE_CAPACITY
   };
   state.nodes.push(node);
@@ -356,7 +471,7 @@ function pauseReason(node) {
     return paused ? `组内${nodeTitle(paused)}${pauseReason(paused) ? `-${pauseReason(paused)}` : ""}` : "组内暂停";
   }
   if (nodeTypes[node.kind]?.adapter) {
-    if (storeTotal(node.outputStore) >= node.capacity) return "接口堵塞";
+    if (adapterHasBlockedOutput(node)) return "接口堵塞";
     return "等待连接";
   }
   if (node.kind === "source") return node.reserve <= 0 ? "矿源耗尽" : "未接输出";
@@ -395,7 +510,7 @@ function nodeRunState(node) {
     return { key: "idle", label: "未启动" };
   }
   if (nodeTypes[node.kind]?.adapter) {
-    if (storeTotal(node.outputStore) >= node.capacity) return { key: "paused", label: "暂停" };
+    if (adapterHasBlockedOutput(node)) return { key: "paused", label: "暂停" };
     return state.links.some((link) => link.fromNode === node.id || link.toNode === node.id) || state.powerLinks.some((link) => link.fromNode === node.id || link.toNode === node.id)
       ? { key: "running", label: "启动" }
       : { key: "idle", label: "未启动" };
@@ -451,16 +566,20 @@ function adapterNodeInGroup(group, kind) {
 }
 
 function inferLinkResource(link) {
+  if (!link) return null;
   if (link?.resource) return link.resource;
   const from = nodeById(link?.fromNode);
   const to = nodeById(link?.toNode);
   if (from?.kind === "source") return `${from.resource}_deposit`;
   if (from?.kind === "miner") return from.miningResource;
-  if (activeRecipe(from)) return activeRecipe(from).output;
-  if (to?.kind === "miner") return Object.keys(from?.outputStore || {}).find((key) => key.endsWith("_deposit")) || null;
-  const recipe = activeRecipe(to);
+  if (from && activeRecipe(from)) return activeRecipe(from).output;
+  if (to?.kind === "miner") {
+    const store = nodeTypes[from?.kind]?.adapter ? adapterPortStore(from, "outputs", link.fromPort) : from?.outputStore;
+    return Object.keys(store || {}).find((key) => key.endsWith("_deposit")) || null;
+  }
+  const recipe = to ? activeRecipe(to) : null;
   if (recipe && Object.keys(recipe.inputs).length === 1) return Object.keys(recipe.inputs).find((key) => canReceiveResourceType(to, key, link.toPort)) || null;
-  return Object.keys(outputStoreFor(from || {}) || {}).find((key) => key !== "undefined") || null;
+  return from ? firstStoreResource(outputStoreForLink(from, link.fromPort || 0)) : null;
 }
 
 function rebuildGroupInterfaces(group) {
@@ -475,9 +594,16 @@ function rebuildGroupInterfaces(group) {
   if (inputAdapter) {
     for (let port = 0; port < 3; port += 1) {
       const internal = state.links.find((link) => link.fromNode === inputAdapter.id && link.fromPort === port);
-      const resource = inputAdapter.adapterResources?.outputs?.[port] || inferLinkResource(internal);
+      const external = state.links.find((link) => link.toNode === group.id && link.toPort === port);
+      const storedInput = firstStoreResource(adapterPortStore(inputAdapter, "inputs", port));
+      const storedOutput = firstStoreResource(adapterPortStore(inputAdapter, "outputs", port));
+      const resource = external?.resource || storedInput || storedOutput || inputAdapter.adapterResources?.outputs?.[port] || inferLinkResource(internal);
       if (internal || resource) {
-        if (resource) inputAdapter.adapterResources.outputs[port] = resource;
+        if (resource) {
+          const current = inputAdapter.adapterResources?.inputs?.[port] || inputAdapter.adapterResources?.outputs?.[port];
+          if (current && current !== resource) clearGroupPortPackets(group, "input", port, resource);
+          rebindAdapterPort(inputAdapter, port, resource);
+        }
         data.inputs.push({ groupPort: port, adapterNodeId: inputAdapter.id, adapterPort: port, resource: resource || null });
       }
     }
@@ -485,9 +611,15 @@ function rebuildGroupInterfaces(group) {
   if (outputAdapter) {
     for (let port = 0; port < 3; port += 1) {
       const internal = state.links.find((link) => link.toNode === outputAdapter.id && link.toPort === port);
-      const resource = outputAdapter.adapterResources?.inputs?.[port] || inferLinkResource(internal);
+      const storedInput = firstStoreResource(adapterPortStore(outputAdapter, "inputs", port));
+      const storedOutput = firstStoreResource(adapterPortStore(outputAdapter, "outputs", port));
+      const resource = internal?.resource || storedInput || storedOutput || inferLinkResource(internal) || outputAdapter.adapterResources?.inputs?.[port];
       if (internal || resource) {
-        if (resource) outputAdapter.adapterResources.inputs[port] = resource;
+        if (resource) {
+          const current = outputAdapter.adapterResources?.inputs?.[port] || outputAdapter.adapterResources?.outputs?.[port];
+          if (current && current !== resource) clearGroupPortPackets(group, "output", port, resource);
+          rebindAdapterPort(outputAdapter, port, resource);
+        }
         data.outputs.push({ groupPort: port, adapterNodeId: outputAdapter.id, adapterPort: port, resource: resource || null });
       }
     }
@@ -763,6 +895,7 @@ function focusContext() {
 
 function visibleNode(node) {
   if (state.activeGroupId) return node.groupId === state.activeGroupId;
+  if (node.kind === "group") return true;
   return !node.groupId;
 }
 
@@ -810,7 +943,12 @@ function setDeviceTab(group) {
 function renderNodes() {
   nodesLayer.innerHTML = "";
   const focus = focusContext();
-  for (const node of state.nodes.filter(visibleNode)) {
+  const visibleNodes = state.nodes.filter(visibleNode);
+  for (const node of visibleNodes) {
+    if (node.kind === "group") {
+      renderGroupNode(node, focus);
+      continue;
+    }
     const type = nodeTypes[node.kind];
     const runState = nodeRunState(node);
     const powerClass = powerVisualClass(node);
@@ -852,6 +990,105 @@ function renderNodes() {
     element.addEventListener("pointerdown", startNodeDrag);
     nodesLayer.appendChild(element);
   }
+  if (!nodesLayer.children.length && state.nodes.some((node) => node.kind === "group")) {
+    state.activeGroupId = null;
+    for (const group of state.nodes.filter((node) => node.kind === "group")) {
+      renderGroupNode(group, focus);
+    }
+  }
+}
+
+function renderGroupNodeLegacyUnused(node, focus) {
+  document.body.dataset.groupRenderAttempt = node.id;
+  document.body.dataset.groupRenderError = "";
+  try {
+    document.body.dataset.groupRenderStep = "data";
+    const data = rebuildGroupInterfaces(node);
+    document.body.dataset.groupRenderStep = "element";
+    const element = document.createElement("article");
+    element.className = `node group-node state-idle ${isNodeSelected(node.id) ? "selected" : ""}`;
+    element.dataset.id = node.id;
+    element.style.left = `${node.x}px`;
+    element.style.top = `${node.y}px`;
+    document.body.dataset.groupRenderStep = "html";
+    element.innerHTML = `
+      <div class="node-header"><span>${nodeTitle(node)}</span><i></i></div>
+      <div class="node-body">
+        <div class="run-state idle">运行状态 未启动</div>
+        <div class="node-recipe mid-layer">组内 ${data.children.length} 节点</div>
+        <div class="node-store detail-layer"><span>接口</span><div>${data.inputs.length} input / ${data.outputs.length} output / ${data.powerInput ? "power" : "no power"}</div></div>
+      </div>
+    `;
+    document.body.dataset.groupRenderStep = "append";
+    element.addEventListener("pointerdown", startNodeDrag);
+    nodesLayer.appendChild(element);
+    document.body.dataset.groupRenderStep = "done";
+    document.body.dataset.groupRenderDone = String(nodesLayer.children.length);
+  } catch (error) {
+    document.body.dataset.groupRenderError = error?.message || String(error);
+  }
+  return;
+  element.innerHTML = `
+    <div class="node-header">
+      <span>${nodeDisplayTitle(node)}</span>
+      <i></i>
+    </div>
+    <div class="node-body">
+      <div class="node-desc detail-layer">${nodeTypes.group.desc}</div>
+      <div class="run-state ${runState.key}">运行状态 ${runState.label}</div>
+      <div class="node-recipe mid-layer">组内 ${data.children.length} 节点</div>
+      <div class="node-store detail-layer"><span>输入接口</span><div>${data.inputs.length ? data.inputs.map((item) => `<span class="resource-badge"><i style="background:${resourceColor(item.resource)}"></i><b>${item.resource ? resourceName(item.resource) : "待锁定"}</b><em>${item.groupPort + 1}</em></span>`).join("") : `<span class="resource-empty">无</span>`}</div></div>
+      <div class="node-store detail-layer"><span>输出接口</span><div>${data.outputs.length ? data.outputs.map((item) => `<span class="resource-badge"><i style="background:${resourceColor(item.resource)}"></i><b>${item.resource ? resourceName(item.resource) : "待锁定"}</b><em>${item.groupPort + 1}</em></span>`).join("") : `<span class="resource-empty">无</span>`}</div></div>
+    </div>
+    ${portsHtml(node)}
+  `;
+  element.addEventListener("pointerdown", startNodeDrag);
+  nodesLayer.appendChild(element);
+}
+
+function renderGroupNode(node, focus) {
+  const runState = nodeRunState(node);
+  const dimClass = focus && !focus.nodeIds.has(node.id) ? "dimmed-node" : "";
+  const data = rebuildGroupInterfaces(node);
+  const inputText = data.inputs.length ? `${data.inputs.length} 输入` : "无输入";
+  const outputText = data.outputs.length ? `${data.outputs.length} 输出` : "无输出";
+  const powerText = data.powerInput ? "电力" : "无电力";
+  const element = document.createElement("article");
+  element.className = `node group-node state-${runState.key} ${dimClass} ${isNodeSelected(node.id) ? "selected" : ""}`;
+  element.dataset.id = node.id;
+  element.style.left = `${node.x}px`;
+  element.style.top = `${node.y}px`;
+  element.innerHTML = `
+    <div class="node-header">
+      <span>${nodeDisplayTitle(node)}</span>
+      <i></i>
+    </div>
+    <div class="node-body">
+      <div class="node-desc detail-layer">${nodeTypes.group.desc}</div>
+      <div class="run-state ${runState.key}">运行状态 ${runState.label}</div>
+      <div class="node-recipe mid-layer">组内 ${data.children.length} 节点</div>
+      <div class="node-store detail-layer"><span>接口</span><div>${inputText} / ${outputText} / ${powerText}</div></div>
+    </div>
+    ${portsHtml(node)}
+  `;
+  element.addEventListener("pointerdown", (event) => {
+    const now = performance.now();
+    const repeatedClick = state.lastGroupClick.id === node.id && now - state.lastGroupClick.at < 900;
+    state.lastGroupClick = { id: node.id, at: now };
+    if (event.detail >= 2 || repeatedClick) {
+      state.lastGroupClick = { id: null, at: 0 };
+      event.preventDefault();
+      event.stopPropagation();
+      enterGroup(node.id);
+      return;
+    }
+    startNodeDrag(event);
+  });
+  element.addEventListener("dblclick", (event) => {
+    event.stopPropagation();
+    enterGroup(node.id);
+  });
+  nodesLayer.appendChild(element);
 }
 
 function powerVisualClass(node) {
@@ -1188,12 +1425,12 @@ function renderMultiSelectionInspector() {
   const logisticsLinks = state.links.filter((link) => state.selectedIds.includes(link.fromNode) || state.selectedIds.includes(link.toNode)).length;
   const powerLinks = state.powerLinks.filter((link) => state.selectedIds.includes(link.fromNode) || state.selectedIds.includes(link.toNode)).length;
   inspector.innerHTML = `
+    <button class="inspector-action primary" id="create-group" type="button">创建封装分组</button>
     <div class="info-row"><span>已选节点</span><b>${nodes.length}</b></div>
     <div class="info-row"><span>电力节点</span><b>${powerNodes}</b></div>
     <div class="info-row"><span>相关物流线</span><b>${logisticsLinks}</b></div>
     <div class="info-row"><span>相关电力线</span><b>${powerLinks}</b></div>
     <div class="info-row"><span>批量操作</span><b>拖动任一选中节点可整体移动</b></div>
-    <button class="inspector-action" id="create-group" type="button">创建封装分组</button>
     ${state.activeGroupId ? `<button class="inspector-action" id="exit-group" type="button">返回上级画布</button>` : ""}
     <button class="inspector-action danger" id="delete-selected-node" type="button">删除选中节点</button>
   `;
@@ -1241,7 +1478,7 @@ function createGroupFromSelection() {
   const maxX = Math.max(...selected.map((node) => node.x));
   const maxY = Math.max(...selected.map((node) => node.y));
   const group = createNodeRaw("group", null, Math.round((minX + maxX) / 2), Math.max(54, minY - 80));
-  group.groupId = state.activeGroupId;
+  group.groupId = null;
   group.capacity = DEVICE_CAPACITY;
   group.groupData = createEmptyGroupData();
   for (const node of selected) {
@@ -2061,9 +2298,20 @@ function outputStoreFor(node) {
   return node.outputStore;
 }
 
-function incomingAmount(nodeId, resource = null) {
+function outputStoreForLink(node, port = 0) {
+  if (nodeTypes[node?.kind]?.adapter) return adapterPortStore(node, "outputs", port);
+  if (node?.kind === "group") {
+    const map = groupOutputMap(node, port);
+    const adapter = map ? nodeById(map.adapterNodeId) : null;
+    return adapter ? adapterPortStore(adapter, "outputs", map.adapterPort) : {};
+  }
+  return outputStoreFor(node);
+}
+
+function incomingAmount(nodeId, resource = null, port = null) {
   return state.links.reduce((total, link) => {
     if (link.toNode !== nodeId) return total;
+    if (port !== null && link.toPort !== port) return total;
     return total + link.packets.reduce((sum, packet) => {
       if (resource && packet.resource !== resource) return sum;
       return sum + packet.amount;
@@ -2085,7 +2333,11 @@ function canReceive(node, resource, amount, port = 0, includeIncoming = false) {
   const incomingTotal = includeIncoming ? incomingAmount(node.id) : 0;
   const incomingResource = includeIncoming ? incomingAmount(node.id, resource) : 0;
   if (nodeTypes[node.kind]?.adapter) {
-    return storeTotal(node.inputStore) + incomingTotal + amount <= node.capacity && storeTotal(node.outputStore) < node.capacity;
+    const portIncomingTotal = includeIncoming ? incomingAmount(node.id, null, port) : 0;
+    const inputPortStore = adapterPortStore(node, "inputs", port);
+    const outputPortStore = adapterPortStore(node, "outputs", port);
+    return storeTotal(inputPortStore) + portIncomingTotal + amount <= ADAPTER_PORT_CAPACITY
+      && storeTotal(outputPortStore) < ADAPTER_PORT_CAPACITY;
   }
   if (node.kind === "miner") {
     if (storeTotal(node.inputStore) + incomingTotal + amount > node.capacity) return false;
@@ -2121,15 +2373,16 @@ function receiveResource(node, resource, amount, port = 0) {
   if (node.kind === "warehouse" && !node.warehouseResource) {
     node.warehouseResource = resource;
   }
+  if (nodeTypes[node.kind]?.adapter) {
+    rebindAdapterPort(node, port, resource);
+    addStore(adapterPortStore(node, "inputs", port), resource, amount);
+  }
   addStore(node.inputStore, resource, amount);
 }
 
 function lockAdapterResource(node, side, port, resource) {
   if (!nodeTypes[node?.kind]?.adapter || !resource) return;
-  node.adapterResources ||= createAdapterResources(node.kind);
-  if (!node.adapterResources[side][port]) node.adapterResources[side][port] = resource;
-  const otherSide = side === "inputs" ? "outputs" : "inputs";
-  if (!node.adapterResources[otherSide][port]) node.adapterResources[otherSide][port] = resource;
+  rebindAdapterPort(node, port, resource);
 }
 
 function isOutputUsed(nodeId, port) {
@@ -2335,6 +2588,7 @@ function createLink(toNode, toPort) {
     totalMoved: 0,
     emitBuffer: 0
   });
+  pruneAdapterPortBindings();
   state.selectedLinkId = null;
   setStatus("连线成功，M2 物流会自动沿线运输", "ok");
   render();
@@ -2404,6 +2658,7 @@ function deleteSelectedLink() {
     if (removed) state.cableStock += 1;
   } else {
     state.links = state.links.filter((link) => link.id !== state.selectedLinkId);
+    pruneAdapterPortBindings();
   }
   state.selectedLinkId = null;
   state.selectedLinkType = null;
@@ -2452,6 +2707,7 @@ function forceDeleteNode(nodeId, shouldRender = true) {
   state.nodes = state.nodes.filter((item) => item.id !== nodeId);
   state.links = state.links.filter((link) => link.fromNode !== nodeId && link.toNode !== nodeId);
   state.powerLinks = state.powerLinks.filter((link) => link.fromNode !== nodeId && link.toNode !== nodeId);
+  pruneAdapterPortBindings();
   if (shouldRender) {
     clearSelection();
     setStatus(`已删除 ${node ? nodeTitle(node) : "节点"}，相关连线已清理`, "ok");
@@ -2623,23 +2879,25 @@ function emitPackets(link, dt) {
   if (!from || !to || link.packets.length >= LOGISTICS_PACKET_LIMIT) return;
   if (from.kind === "warehouse" && !from.outputOpen[link.fromPort]) return;
   if (from.kind === "group" && !groupOutputMap(from, link.fromPort)) return;
-  const store = outputStoreFor(from);
+  const store = outputStoreForLink(from, link.fromPort);
   if (link.resource && !canReceive(to, link.resource, 1, link.toPort, true) && link.packets.length === 0) {
     link.resource = null;
   }
   const groupOutput = from.kind === "group" ? groupOutputMap(from, link.fromPort) : null;
   const lockedOutput = nodeTypes[from.kind]?.adapter ? from.adapterResources?.outputs?.[link.fromPort] : null;
+  const storedOutput = firstStoreResource(store);
   const resource = from.kind === "source"
     ? `${from.resource}_deposit`
-    : (groupOutput?.resource || lockedOutput || link.resource || Object.keys(store).find((key) => store[key] >= 1 && canReceive(to, key, 1, link.toPort, true)));
+    : (storedOutput || groupOutput?.resource || lockedOutput || link.resource || Object.keys(store).find((key) => store[key] >= 1 && canReceive(to, key, 1, link.toPort, true)));
   if (!resource) return;
+  if (storedOutput && link.resource && link.resource !== storedOutput && link.packets.length === 0) link.resource = null;
   if (!link.resource) link.resource = resource;
   lockAdapterResource(from, "outputs", link.fromPort, link.resource);
   if (resource !== link.resource) return;
   if (!canReceive(to, link.resource, 1, link.toPort, true)) return;
 
   link.emitBuffer += dt * link.rate;
-  while (link.emitBuffer >= 1 && hasAvailableOutput(from, store, link.resource) && canReceive(to, link.resource, 1, link.toPort, true) && link.packets.length < LOGISTICS_PACKET_LIMIT) {
+  while (link.emitBuffer >= 1 && hasAvailableOutput(from, store, link.resource, link.fromPort) && canReceive(to, link.resource, 1, link.toPort, true) && link.packets.length < LOGISTICS_PACKET_LIMIT) {
     if (from.kind === "warehouse" && from.warehouseOutBuffer < 1) break;
     if (from.kind === "warehouse" && (from.outputLimitBuffers[link.fromPort] || 0) < 1) break;
     link.emitBuffer -= 1;
@@ -2647,7 +2905,7 @@ function emitPackets(link, dt) {
       from.warehouseOutBuffer -= 1;
       from.outputLimitBuffers[link.fromPort] -= 1;
     }
-    consumeOutput(from, store, link.resource);
+    consumeOutput(from, store, link.resource, link.fromPort);
     link.packets.push({
       resource: link.resource,
       amount: 1,
@@ -2657,24 +2915,33 @@ function emitPackets(link, dt) {
   }
 }
 
-function hasAvailableOutput(node, store, resource) {
+function hasAvailableOutput(node, store, resource, port = 0) {
   if (node.kind === "source") return node.reserve >= 1 && `${node.resource}_deposit` === resource;
   if (node.kind === "group") {
-    const map = groupOutputMap(node, state.links.find((link) => link.fromNode === node.id && link.resource === resource)?.fromPort ?? 0);
-    const adapter = map ? nodeById(map.adapterNodeId) : adapterNodeInGroup(node, "adapter_output");
-    return Boolean(adapter && (adapter.outputStore[resource] || 0) >= 1);
+    const map = groupOutputMap(node, port);
+    const adapter = map ? nodeById(map.adapterNodeId) : null;
+    return Boolean(adapter && (adapterPortStore(adapter, "outputs", map.adapterPort)[resource] || 0) >= 1);
   }
   return (store[resource] || 0) >= 1;
 }
 
-function consumeOutput(node, store, resource) {
+function consumeOutput(node, store, resource, port = 0) {
   if (node.kind === "source") {
     node.reserve = Math.max(0, node.reserve - 1);
     return;
   }
   if (node.kind === "group") {
-    const outputAdapter = adapterNodeInGroup(node, "adapter_output");
-    if (outputAdapter) addStore(outputAdapter.outputStore, resource, -1);
+    const map = groupOutputMap(node, port);
+    const outputAdapter = map ? nodeById(map.adapterNodeId) : null;
+    if (outputAdapter) {
+      addStore(adapterPortStore(outputAdapter, "outputs", map.adapterPort), resource, -1);
+      addStore(outputAdapter.outputStore, resource, -1);
+    }
+    return;
+  }
+  if (nodeTypes[node.kind]?.adapter) {
+    addStore(adapterPortStore(node, "outputs", port), resource, -1);
+    addStore(node.outputStore, resource, -1);
     return;
   }
   addStore(store, resource, -1);
@@ -2682,14 +2949,20 @@ function consumeOutput(node, store, resource) {
 
 function runAdapter(node, dt) {
   if (!nodeTypes[node.kind]?.adapter) return;
-  const capacity = node.capacity || DEVICE_CAPACITY;
   const moveBudget = Math.max(1, dt * 24);
-  for (const resource of Object.keys(node.inputStore)) {
-    const amount = Math.min(node.inputStore[resource], moveBudget, capacity - storeTotal(node.outputStore));
-    if (amount <= 0) continue;
-    addStore(node.inputStore, resource, -amount);
-    addStore(node.outputStore, resource, amount);
-    node.status = "接口转发中";
+  ensureAdapterPortStores(node);
+  for (let port = 0; port < 3; port += 1) {
+    const inputPortStore = adapterPortStore(node, "inputs", port);
+    const outputPortStore = adapterPortStore(node, "outputs", port);
+    for (const resource of Object.keys(inputPortStore)) {
+      const amount = Math.min(inputPortStore[resource], moveBudget, ADAPTER_PORT_CAPACITY - storeTotal(outputPortStore));
+      if (amount <= 0) continue;
+      addStore(inputPortStore, resource, -amount);
+      addStore(node.inputStore, resource, -amount);
+      addStore(outputPortStore, resource, amount);
+      addStore(node.outputStore, resource, amount);
+      node.status = "接口转发中";
+    }
   }
 }
 
@@ -2883,6 +3156,7 @@ function loadSaveData(data, name = "本地存档") {
   state.productionStats = { ...(data.productionStats || {}) };
   state.logisticsHistory = [];
   state.logisticsPeak = data.logisticsPeak || 0;
+  pruneAdapterPortBindings();
   const currentTotals = collectResourceTotals();
   for (const [key, value] of Object.entries(currentTotals)) {
     state.productionStats[key] = Math.max(state.productionStats[key] || 0, value);
@@ -2971,7 +3245,7 @@ function normalizedSourceReserve(node) {
 
 function hydrateNode(node) {
   const sourceReserve = normalizedSourceReserve(node);
-  return {
+  const hydrated = {
     inputStore: {},
     outputStore: {},
     reserve: sourceReserve.reserve,
@@ -2999,6 +3273,8 @@ function hydrateNode(node) {
     reserve: sourceReserve.reserve,
     initialReserve: sourceReserve.initialReserve
   };
+  ensureAdapterPortStores(hydrated);
+  return hydrated;
 }
 
 function autoLayout() {
@@ -3146,6 +3422,7 @@ document.querySelector("#show-all-lines").addEventListener("click", () => {
 });
 
 document.querySelector("#auto-layout").addEventListener("click", autoLayout);
+document.querySelector("#create-group-toolbar").addEventListener("click", createGroupFromSelection);
 document.querySelector("#demo-line").addEventListener("click", buildDemoLine);
 document.querySelector("#save-game").addEventListener("click", saveGame);
 document.querySelector("#load-game").addEventListener("click", loadGame);
@@ -3190,6 +3467,7 @@ document.querySelector("#clear-lines").addEventListener("click", () => {
   state.cableStock += state.powerLinks.length;
   state.links = [];
   state.powerLinks = [];
+  pruneAdapterPortBindings();
   state.selectedLinkId = null;
   state.selectedLinkType = null;
   setStatus("已清除全部连线", "ok");
