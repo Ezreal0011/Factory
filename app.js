@@ -80,20 +80,20 @@ const recipes = {
   ]
 };
 
-const RECIPE_INPUT_BUFFER_BATCHES = 18;
-const SOURCE_RESERVE_MAX = 50000;
-const MINER_OUTPUT_PER_SECOND = 1 / 1.2;
-const DEVICE_CAPACITY = 180;
-const WAREHOUSE_CAPACITY = 1000;
-const POWER_WARN_LOAD = 60;
-const POWER_DANGER_LOAD = 80;
-const POWER_OVERLOAD_LOAD = 100;
-const LOGISTICS_PACKET_LIMIT = 10;
-const LOGISTICS_WARN_PACKETS = 7;
-const LOGISTICS_WARN_EFFICIENCY = 80;
-const LOGISTICS_DANGER_EFFICIENCY = 50;
-const LOGISTICS_PACKET_SPACING = 18;
-const ADAPTER_PORT_CAPACITY = 1;
+let RECIPE_INPUT_BUFFER_BATCHES = 18;
+let SOURCE_RESERVE_MAX = 50000;
+let MINER_OUTPUT_PER_SECOND = 1 / 1.2;
+let DEVICE_CAPACITY = 180;
+let WAREHOUSE_CAPACITY = 1000;
+let POWER_WARN_LOAD = 60;
+let POWER_DANGER_LOAD = 80;
+let POWER_OVERLOAD_LOAD = 100;
+let LOGISTICS_PACKET_LIMIT = 10;
+let LOGISTICS_WARN_PACKETS = 7;
+let LOGISTICS_WARN_EFFICIENCY = 80;
+let LOGISTICS_DANGER_EFFICIENCY = 50;
+let LOGISTICS_PACKET_SPACING = 18;
+let ADAPTER_PORT_CAPACITY = 1;
 const SAVE_INDEX_KEY = "factory-save-slots-v1";
 const LEGACY_SAVE_KEY = "factory-save-v1";
 
@@ -169,8 +169,351 @@ const goalRewardDialog = document.querySelector("#goal-reward-dialog");
 const goalRewardTitle = document.querySelector("#goal-reward-title");
 const goalRewardBody = document.querySelector("#goal-reward-body");
 const closeGoalRewardButton = document.querySelector("#close-goal-reward");
+const appShell = document.querySelector(".app");
+const loginScreen = document.querySelector("#login-screen");
+const mainMenuScreen = document.querySelector("#main-menu-screen");
+const rulesScreen = document.querySelector("#rules-screen");
+const loginForm = document.querySelector(".login-card");
+const loginUser = document.querySelector("#login-user");
+const loginPassword = document.querySelector("#login-password");
+const loginError = document.querySelector("#login-error");
+const menuCanvases = [...document.querySelectorAll("[data-menu-canvas]")];
 
 let saveDialogMode = "save";
+
+function defaultInventory() {
+  return {
+    miner: 5,
+    furnace: 5,
+    kiln: 5,
+    caster: 5,
+    assembler: 5,
+    generator: 1,
+    pole: 4,
+    warehouse: 5,
+    adapter_input: 3,
+    adapter_output: 3,
+    adapter_power: 2
+  };
+}
+
+function showScreen(screenName) {
+  loginScreen?.classList.toggle("hidden", screenName !== "login");
+  mainMenuScreen?.classList.toggle("hidden", screenName !== "menu");
+  rulesScreen?.classList.toggle("hidden", screenName !== "rules");
+  appShell?.classList.toggle("is-hidden", screenName !== "game");
+  document.body.dataset.screen = screenName;
+}
+
+function closeOpenDialogs() {
+  [saveDialog, recipeDialog, goalRewardDialog, warehouseDialog].forEach((dialog) => {
+    if (dialog?.open) dialog.close();
+  });
+}
+
+function resetGameState() {
+  closeOpenDialogs();
+  state.nodes = [];
+  state.links = [];
+  state.powerLinks = [];
+  state.selectedId = null;
+  state.selectedIds = [];
+  state.selectedLinkId = null;
+  state.selectedLinkType = null;
+  state.dragLink = null;
+  state.selectionBox = null;
+  state.connectMode = "logistics";
+  state.showLogistics = true;
+  state.showPower = true;
+  state.lineView = "all";
+  state.alertFilter = "all";
+  state.lastMonitorRender = 0;
+  state.lastInspectorRender = 0;
+  state.lastGroupClick = { id: null, at: 0 };
+  state.pointer = { x: 0, y: 0 };
+  state.viewport = { x: 0, y: 0, scale: 1 };
+  state.activeGroupId = null;
+  state.lastTime = performance.now();
+  state.totalThroughput = 0;
+  state.logisticsHistory = [];
+  state.logisticsPeak = 0;
+  state.power = { generation: 0, demand: 0, load: 0, overload: false };
+  state.cableStock = 12;
+  state.completed = false;
+  state.claimedGoalRewards = {};
+  state.productionStats = {};
+  state.inventory = defaultInventory();
+  nextId = 1;
+  document.querySelectorAll("[data-mode]").forEach((item) => item.classList.toggle("active", item.dataset.mode === "logistics"));
+  document.querySelector("#show-all-lines")?.classList.add("active");
+  const firstDeviceTab = document.querySelector("[data-device-tab]");
+  if (firstDeviceTab) setDeviceTab(firstDeviceTab.dataset.deviceTab);
+}
+
+function enterGame() {
+  showScreen("game");
+  render();
+}
+
+function startNewGame() {
+  resetGameState();
+  enterGame();
+  setStatus("新游戏开始：从底部菜单创建矿源、采矿机和仓库，搭建第一条产线。", "ok");
+}
+
+const menuFactoryZones = [
+  { title: "RAW MATERIALS", x: 50, y: 58, w: 440, h: 642 },
+  { title: "SMELTING HALL", x: 560, y: 58, w: 430, h: 642 },
+  { title: "FABRICATION", x: 1060, y: 58, w: 430, h: 642 },
+  { title: "ASSEMBLY / STORAGE", x: 1560, y: 58, w: 430, h: 642 },
+  { title: "POWER BUS", x: 50, y: 735, w: 1940, h: 130 }
+];
+
+const menuFactoryNodes = [
+  { id: "ironSourceA", label: "铁矿源 A", sub: "50K", x: 80, y: 110, w: 120, h: 50, color: "#b9d9f2" },
+  { id: "ironSourceB", label: "铁矿源 B", sub: "50K", x: 80, y: 210, w: 120, h: 50, color: "#b9d9f2" },
+  { id: "copperSource", label: "铜矿源", sub: "50K", x: 80, y: 340, w: 120, h: 50, color: "#f0a24a" },
+  { id: "coalSource", label: "煤矿源", sub: "50K", x: 80, y: 470, w: 120, h: 50, color: "#6f7780" },
+  { id: "sandSource", label: "砂矿源", sub: "50K", x: 80, y: 600, w: 120, h: 50, color: "#d8c89f" },
+  { id: "ironMinerA", label: "采矿机", sub: "铁矿", x: 285, y: 100, w: 116, h: 54, color: "#73c8ff" },
+  { id: "ironMinerB", label: "采矿机", sub: "铁矿", x: 285, y: 200, w: 116, h: 54, color: "#73c8ff" },
+  { id: "copperMiner", label: "采矿机", sub: "铜矿", x: 285, y: 330, w: 116, h: 54, color: "#73c8ff" },
+  { id: "coalMiner", label: "采矿机", sub: "煤矿", x: 285, y: 460, w: 116, h: 54, color: "#73c8ff" },
+  { id: "sandMiner", label: "采矿机", sub: "砂矿", x: 285, y: 590, w: 116, h: 54, color: "#73c8ff" },
+  { id: "ironBuffer", label: "原矿仓", sub: "铁矿汇流", x: 590, y: 145, w: 126, h: 56, color: "#58b7ff" },
+  { id: "coalBuffer", label: "燃料仓", sub: "煤炭汇流", x: 590, y: 450, w: 126, h: 56, color: "#58b7ff" },
+  { id: "copperBuffer", label: "原矿仓", sub: "铜矿缓存", x: 590, y: 330, w: 126, h: 56, color: "#58b7ff" },
+  { id: "sandBuffer", label: "原料仓", sub: "砂矿缓存", x: 590, y: 590, w: 126, h: 56, color: "#58b7ff" },
+  { id: "furnaceIronA", label: "熔炉 A", sub: "铁锭", x: 805, y: 105, w: 122, h: 60, color: "#7ef0b2" },
+  { id: "furnaceIronB", label: "熔炉 B", sub: "铁锭", x: 805, y: 205, w: 122, h: 60, color: "#7ef0b2" },
+  { id: "furnaceCopper", label: "熔炉 C", sub: "铜锭", x: 805, y: 335, w: 122, h: 60, color: "#7ef0b2" },
+  { id: "furnaceGlass", label: "熔炉 D", sub: "玻璃", x: 805, y: 585, w: 122, h: 60, color: "#7ef0b2" },
+  { id: "ingotBuffer", label: "锭仓", sub: "铁/铜/玻璃", x: 1085, y: 180, w: 126, h: 58, color: "#58b7ff" },
+  { id: "kilnA", label: "高温熔炉", sub: "钢锭 A", x: 1085, y: 305, w: 132, h: 62, color: "#9fc4e7" },
+  { id: "kilnB", label: "高温熔炉", sub: "钢锭 B", x: 1085, y: 420, w: 132, h: 62, color: "#9fc4e7" },
+  { id: "steelBuffer", label: "钢锭仓", sub: "中间品", x: 1085, y: 550, w: 126, h: 58, color: "#58b7ff" },
+  { id: "casterIron", label: "铸造厂", sub: "铁板/铁棒", x: 1305, y: 120, w: 132, h: 62, color: "#ffbf66" },
+  { id: "casterCopper", label: "铸造厂", sub: "铜板/铜线", x: 1305, y: 250, w: 132, h: 62, color: "#ffbf66" },
+  { id: "casterSteel", label: "铸造厂", sub: "钢板/钢棒", x: 1305, y: 420, w: 132, h: 62, color: "#ffbf66" },
+  { id: "partsBufferA", label: "零件仓 A", sub: "板材", x: 1585, y: 150, w: 126, h: 58, color: "#58b7ff" },
+  { id: "partsBufferB", label: "零件仓 B", sub: "杆件/线缆", x: 1585, y: 315, w: 126, h: 58, color: "#58b7ff" },
+  { id: "assemblerA", label: "组装厂 A", sub: "齿轮/框架", x: 1780, y: 160, w: 138, h: 66, color: "#7ef0b2" },
+  { id: "assemblerB", label: "组装厂 B", sub: "动力组件", x: 1780, y: 300, w: 138, h: 66, color: "#7ef0b2" },
+  { id: "assemblerCore", label: "核心组装", sub: "机械核心", x: 1780, y: 455, w: 138, h: 66, color: "#ffffff" },
+  { id: "finalStore", label: "成品仓库", sub: "阶段产物", x: 1780, y: 590, w: 138, h: 58, color: "#ffffff" },
+  { id: "generatorA", label: "发电厂 A", sub: "80 MW", x: 310, y: 775, w: 126, h: 56, color: "#ffe45c" },
+  { id: "generatorB", label: "发电厂 B", sub: "80 MW", x: 520, y: 775, w: 126, h: 56, color: "#ffe45c" },
+  { id: "poleA", label: "电杆 A", sub: "母线", x: 780, y: 775, w: 110, h: 54, color: "#ffe45c" },
+  { id: "poleB", label: "电杆 B", sub: "冶炼区", x: 1040, y: 775, w: 110, h: 54, color: "#ffe45c" },
+  { id: "poleC", label: "电杆 C", sub: "制造区", x: 1300, y: 775, w: 110, h: 54, color: "#ffe45c" },
+  { id: "poleD", label: "电杆 D", sub: "装配区", x: 1560, y: 775, w: 110, h: 54, color: "#ffe45c" }
+];
+
+const menuFactoryLinks = [
+  { type: "logistics", color: "#b9d9f2", points: [[200, 135], [250, 135], [250, 127], [285, 127]] },
+  { type: "logistics", color: "#b9d9f2", points: [[200, 235], [250, 235], [250, 227], [285, 227]] },
+  { type: "logistics", color: "#f0a24a", points: [[200, 365], [285, 365]] },
+  { type: "logistics", color: "#6f7780", points: [[200, 495], [285, 495]] },
+  { type: "logistics", color: "#d8c89f", points: [[200, 625], [285, 625]] },
+  { type: "logistics", color: "#b9d9f2", points: [[401, 127], [490, 127], [490, 173], [590, 173]] },
+  { type: "logistics", color: "#b9d9f2", points: [[401, 227], [490, 227], [490, 173], [590, 173]] },
+  { type: "logistics", color: "#f0a24a", points: [[401, 357], [590, 357]] },
+  { type: "logistics", color: "#6f7780", points: [[401, 487], [590, 487]] },
+  { type: "logistics", color: "#d8c89f", points: [[401, 617], [590, 617]] },
+  { type: "logistics", color: "#b9d9f2", points: [[716, 173], [760, 173], [760, 135], [805, 135]] },
+  { type: "logistics", color: "#b9d9f2", points: [[716, 173], [760, 173], [760, 235], [805, 235]] },
+  { type: "logistics", color: "#6f7780", points: [[716, 487], [760, 487], [760, 155], [805, 155]] },
+  { type: "logistics", color: "#6f7780", points: [[716, 487], [760, 487], [760, 255], [805, 255]] },
+  { type: "logistics", color: "#f0a24a", points: [[716, 357], [805, 365]] },
+  { type: "logistics", color: "#6f7780", points: [[716, 487], [760, 487], [760, 385], [805, 385]] },
+  { type: "logistics", color: "#d8c89f", points: [[716, 617], [805, 615]] },
+  { type: "logistics", color: "#d7ecff", points: [[927, 135], [1010, 135], [1010, 209], [1085, 209]] },
+  { type: "logistics", color: "#d7ecff", points: [[927, 235], [1010, 235], [1010, 209], [1085, 209]] },
+  { type: "logistics", color: "#ffbf66", points: [[927, 365], [1010, 365], [1010, 225], [1085, 225]] },
+  { type: "logistics", color: "#aeeeff", points: [[927, 615], [1010, 615], [1010, 225], [1085, 225]] },
+  { type: "logistics", color: "#d7ecff", points: [[1211, 209], [1255, 209], [1255, 337], [1085, 337]] },
+  { type: "logistics", color: "#6f7780", points: [[716, 487], [1025, 487], [1025, 337], [1085, 337]] },
+  { type: "logistics", color: "#d7ecff", points: [[1211, 209], [1255, 209], [1255, 452], [1085, 452]] },
+  { type: "logistics", color: "#6f7780", points: [[716, 487], [1040, 487], [1040, 452], [1085, 452]] },
+  { type: "logistics", color: "#9fc4e7", points: [[1217, 337], [1255, 337], [1255, 579], [1085, 579]] },
+  { type: "logistics", color: "#9fc4e7", points: [[1217, 452], [1255, 452], [1255, 579], [1085, 579]] },
+  { type: "logistics", color: "#d7ecff", points: [[1211, 209], [1260, 209], [1260, 151], [1305, 151]] },
+  { type: "logistics", color: "#ffbf66", points: [[1211, 225], [1260, 225], [1260, 281], [1305, 281]] },
+  { type: "logistics", color: "#9fc4e7", points: [[1211, 579], [1260, 579], [1260, 451], [1305, 451]] },
+  { type: "logistics", color: "#d7ecff", points: [[1437, 151], [1510, 151], [1510, 179], [1585, 179]] },
+  { type: "logistics", color: "#ffd37a", points: [[1437, 281], [1510, 281], [1510, 344], [1585, 344]] },
+  { type: "logistics", color: "#9fc4e7", points: [[1437, 451], [1510, 451], [1510, 344], [1585, 344]] },
+  { type: "logistics", color: "#c9d6df", points: [[1711, 179], [1745, 179], [1745, 193], [1780, 193]] },
+  { type: "logistics", color: "#ffd37a", points: [[1711, 344], [1745, 344], [1745, 333], [1780, 333]] },
+  { type: "logistics", color: "#c9d6df", points: [[1918, 193], [1955, 193], [1955, 488], [1780, 488]] },
+  { type: "logistics", color: "#7ef0b2", points: [[1918, 333], [1955, 333], [1955, 488], [1780, 488]] },
+  { type: "logistics", color: "#ffffff", points: [[1918, 488], [1960, 488], [1960, 619], [1918, 619]] },
+  { type: "logistics", color: "#6f7780", points: [[401, 487], [455, 487], [455, 803], [310, 803]] },
+  { type: "logistics", color: "#6f7780", points: [[590, 487], [560, 487], [560, 803], [520, 803]] },
+  { type: "power", color: "#ffe45c", points: [[436, 803], [520, 803]] },
+  { type: "power", color: "#ffe45c", points: [[646, 803], [780, 803]] },
+  { type: "power", color: "#ffe45c", points: [[890, 803], [1040, 803]] },
+  { type: "power", color: "#ffe45c", points: [[1150, 803], [1300, 803]] },
+  { type: "power", color: "#ffe45c", points: [[1410, 803], [1560, 803]] },
+  { type: "power", color: "#ffe45c", points: [[835, 775], [835, 680], [866, 680], [866, 165]] },
+  { type: "power", color: "#ffe45c", points: [[1095, 775], [1095, 665], [1151, 665], [1151, 482]] },
+  { type: "power", color: "#ffe45c", points: [[1355, 775], [1355, 660], [1371, 660], [1371, 482]] },
+  { type: "power", color: "#ffe45c", points: [[1615, 775], [1615, 690], [1849, 690], [1849, 521]] },
+  { type: "power", color: "#ffe45c", points: [[1615, 775], [1615, 690], [1849, 690], [1849, 366]] },
+  { type: "power", color: "#ffe45c", points: [[1615, 775], [1615, 690], [1849, 690], [1849, 226]] }
+];
+
+function pathLength(points) {
+  return points.slice(1).reduce((sum, point, index) => {
+    const prev = points[index];
+    return sum + Math.hypot(point[0] - prev[0], point[1] - prev[1]);
+  }, 0);
+}
+
+function pointAtPath(points, distance) {
+  let remaining = distance;
+  for (let index = 1; index < points.length; index += 1) {
+    const start = points[index - 1];
+    const end = points[index];
+    const length = Math.hypot(end[0] - start[0], end[1] - start[1]);
+    if (remaining <= length) {
+      const ratio = length ? remaining / length : 0;
+      return [start[0] + (end[0] - start[0]) * ratio, start[1] + (end[1] - start[1]) * ratio];
+    }
+    remaining -= length;
+  }
+  return points[points.length - 1];
+}
+
+function drawMenuFactoryBackground(canvas, now) {
+  const rect = canvas.getBoundingClientRect();
+  if (rect.width < 2 || rect.height < 2) return;
+  const dpr = window.devicePixelRatio || 1;
+  const width = Math.floor(rect.width * dpr);
+  const height = Math.floor(rect.height * dpr);
+  if (canvas.width !== width || canvas.height !== height) {
+    canvas.width = width;
+    canvas.height = height;
+  }
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, rect.width, rect.height);
+  const baseWidth = 2060;
+  const baseHeight = 920;
+  const scale = Math.max(rect.width / baseWidth, rect.height / baseHeight);
+  const offsetX = (rect.width - baseWidth * scale) * 0.5;
+  const offsetY = (rect.height - baseHeight * scale) * 0.5;
+  const tx = (x) => offsetX + x * scale;
+  const ty = (y) => offsetY + y * scale;
+
+  ctx.fillStyle = "#04101a";
+  ctx.fillRect(0, 0, rect.width, rect.height);
+  ctx.strokeStyle = "rgba(106, 172, 214, 0.12)";
+  ctx.lineWidth = 1;
+  const grid = 42 * scale;
+  for (let x = offsetX % grid; x < rect.width; x += grid) {
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, rect.height);
+    ctx.stroke();
+  }
+  for (let y = offsetY % grid; y < rect.height; y += grid) {
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(rect.width, y);
+    ctx.stroke();
+  }
+
+  for (const zone of menuFactoryZones) {
+    const x = tx(zone.x);
+    const y = ty(zone.y);
+    const w = zone.w * scale;
+    const h = zone.h * scale;
+    ctx.fillStyle = "rgba(9, 28, 42, 0.26)";
+    ctx.strokeStyle = "rgba(132, 199, 255, 0.16)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.roundRect(x, y, w, h, Math.min(10, 10 * scale));
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = "rgba(157, 215, 255, 0.2)";
+    ctx.font = `${Math.max(8, 10 * scale)}px Segoe UI, Arial, sans-serif`;
+    ctx.fillText(zone.title, x + 12 * scale, y + 18 * scale);
+  }
+
+  for (const link of menuFactoryLinks) {
+    const points = link.points.map(([x, y]) => [tx(x), ty(y)]);
+    ctx.lineWidth = link.type === "power" ? 2.4 : 1.8;
+    ctx.strokeStyle = link.type === "power" ? "rgba(255, 228, 92, 0.38)" : "rgba(88, 183, 255, 0.32)";
+    ctx.beginPath();
+    points.forEach(([x, y], index) => index ? ctx.lineTo(x, y) : ctx.moveTo(x, y));
+    ctx.stroke();
+    ctx.strokeStyle = link.color;
+    ctx.globalAlpha = 0.2;
+    ctx.lineWidth = link.type === "power" ? 5 : 4;
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+
+    const length = pathLength(points);
+    const count = Math.max(2, Math.floor(length / (link.type === "power" ? 150 : 105)));
+    const speed = link.type === "power" ? 100 : 72;
+    for (let i = 0; i < count; i += 1) {
+      const distance = (now * speed / 1000 + i * (length / count)) % length;
+      const [x, y] = pointAtPath(points, distance);
+      const radius = link.type === "power" ? 2.8 : 3.2;
+      const glow = ctx.createRadialGradient(x, y, 0, x, y, radius * 4);
+      glow.addColorStop(0, link.color);
+      glow.addColorStop(0.34, `${link.color}aa`);
+      glow.addColorStop(1, "rgba(255,255,255,0)");
+      ctx.fillStyle = glow;
+      ctx.beginPath();
+      ctx.arc(x, y, radius * 4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#ffffff";
+      ctx.beginPath();
+      ctx.arc(x, y, radius, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  for (const node of menuFactoryNodes) {
+    const x = tx(node.x);
+    const y = ty(node.y);
+    const w = node.w * scale;
+    const h = node.h * scale;
+    ctx.fillStyle = "rgba(7, 24, 37, 0.96)";
+    ctx.strokeStyle = node.color;
+    ctx.lineWidth = 1;
+    ctx.shadowColor = `${node.color}66`;
+    ctx.shadowBlur = 7;
+    ctx.beginPath();
+    ctx.roundRect(x, y, w, h, Math.min(8, 8 * scale));
+    ctx.fill();
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = `${node.color}33`;
+    ctx.fillRect(x + 1, y + h - 8 * scale, w - 2, 6 * scale);
+    ctx.fillStyle = "#eaf8ff";
+    ctx.font = `${Math.max(9, 13 * scale)}px Microsoft YaHei, Segoe UI, sans-serif`;
+    ctx.textBaseline = "middle";
+    ctx.fillText(node.label, x + 13 * scale, y + h * 0.42);
+    ctx.fillStyle = "#9fc4d6";
+    ctx.font = `${Math.max(8, 9.5 * scale)}px Microsoft YaHei, Segoe UI, sans-serif`;
+    ctx.fillText(node.sub, x + 13 * scale, y + h * 0.72);
+    ctx.fillStyle = node.color;
+    ctx.beginPath();
+    ctx.arc(x - 2 * scale, y + h * 0.5, 3 * scale, 0, Math.PI * 2);
+    ctx.arc(x + w + 2 * scale, y + h * 0.5, 3 * scale, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function animateMenuBackground(now) {
+  for (const canvas of menuCanvases) drawMenuFactoryBackground(canvas, now);
+  requestAnimationFrame(animateMenuBackground);
+}
+
+requestAnimationFrame(animateMenuBackground);
 
 Object.assign(resources, {
   adapter_input_device: { name: "封装输入设备", color: "#9bdcff" },
@@ -192,6 +535,39 @@ for (const recipe of [...recipes.furnace, ...recipes.kiln, ...recipes.caster, ..
   if (recipe.output === "copper_wire") recipe.time = 2.6;
   if (recipe.output === "mechanical_core") recipe.time = 11;
 }
+
+function cloneConfigValue(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function replaceConfigObject(target, source) {
+  for (const key of Object.keys(target)) delete target[key];
+  Object.assign(target, cloneConfigValue(source || {}));
+}
+
+function applyGeneratedGameConfig(config) {
+  if (!config) return;
+  replaceConfigObject(resources, config.resources);
+  replaceConfigObject(nodeTypes, config.nodeTypes);
+  replaceConfigObject(recipes, config.recipes);
+  const balance = config.balance || {};
+  if (balance.RECIPE_INPUT_BUFFER_BATCHES !== undefined) RECIPE_INPUT_BUFFER_BATCHES = Number(balance.RECIPE_INPUT_BUFFER_BATCHES);
+  if (balance.SOURCE_RESERVE_MAX !== undefined) SOURCE_RESERVE_MAX = Number(balance.SOURCE_RESERVE_MAX);
+  if (balance.MINER_OUTPUT_PER_SECOND !== undefined) MINER_OUTPUT_PER_SECOND = Number(balance.MINER_OUTPUT_PER_SECOND);
+  if (balance.DEVICE_CAPACITY !== undefined) DEVICE_CAPACITY = Number(balance.DEVICE_CAPACITY);
+  if (balance.WAREHOUSE_CAPACITY !== undefined) WAREHOUSE_CAPACITY = Number(balance.WAREHOUSE_CAPACITY);
+  if (balance.POWER_WARN_LOAD !== undefined) POWER_WARN_LOAD = Number(balance.POWER_WARN_LOAD);
+  if (balance.POWER_DANGER_LOAD !== undefined) POWER_DANGER_LOAD = Number(balance.POWER_DANGER_LOAD);
+  if (balance.POWER_OVERLOAD_LOAD !== undefined) POWER_OVERLOAD_LOAD = Number(balance.POWER_OVERLOAD_LOAD);
+  if (balance.LOGISTICS_PACKET_LIMIT !== undefined) LOGISTICS_PACKET_LIMIT = Number(balance.LOGISTICS_PACKET_LIMIT);
+  if (balance.LOGISTICS_WARN_PACKETS !== undefined) LOGISTICS_WARN_PACKETS = Number(balance.LOGISTICS_WARN_PACKETS);
+  if (balance.LOGISTICS_WARN_EFFICIENCY !== undefined) LOGISTICS_WARN_EFFICIENCY = Number(balance.LOGISTICS_WARN_EFFICIENCY);
+  if (balance.LOGISTICS_DANGER_EFFICIENCY !== undefined) LOGISTICS_DANGER_EFFICIENCY = Number(balance.LOGISTICS_DANGER_EFFICIENCY);
+  if (balance.LOGISTICS_PACKET_SPACING !== undefined) LOGISTICS_PACKET_SPACING = Number(balance.LOGISTICS_PACKET_SPACING);
+  if (balance.ADAPTER_PORT_CAPACITY !== undefined) ADAPTER_PORT_CAPACITY = Number(balance.ADAPTER_PORT_CAPACITY);
+}
+
+applyGeneratedGameConfig(window.GAME_CONFIG);
 
 function setStatus(text, type = "") {
   statusLine.textContent = text;
@@ -427,6 +803,10 @@ function newNodePosition(kind) {
   };
 }
 
+function nodeDefaultCapacity(kind) {
+  return nodeTypes[kind]?.capacity || (kind === "warehouse" ? WAREHOUSE_CAPACITY : DEVICE_CAPACITY);
+}
+
 function addNode(kind, resource = null) {
   if (kind !== "source" && state.inventory[kind] !== undefined && (state.inventory[kind] || 0) <= 0) {
     setStatus(`${nodeTypes[kind].name} 库存不足`, "error");
@@ -460,7 +840,7 @@ function addNode(kind, resource = null) {
     groupData: kind === "group" ? createEmptyGroupData() : null,
     adapterResources: createAdapterResources(kind),
     adapterPortStores: createAdapterPortStores(kind),
-    capacity: kind === "warehouse" ? WAREHOUSE_CAPACITY : DEVICE_CAPACITY
+    capacity: nodeDefaultCapacity(kind)
   };
   state.nodes.push(node);
   if (kind !== "source" && state.inventory[kind] !== undefined) state.inventory[kind] -= 1;
@@ -497,7 +877,7 @@ function createNodeRaw(kind, resource, x, y) {
     groupData: kind === "group" ? createEmptyGroupData() : null,
     adapterResources: createAdapterResources(kind),
     adapterPortStores: createAdapterPortStores(kind),
-    capacity: kind === "warehouse" ? WAREHOUSE_CAPACITY : DEVICE_CAPACITY
+    capacity: nodeDefaultCapacity(kind)
   };
   state.nodes.push(node);
   return node;
@@ -4152,6 +4532,7 @@ function loadSaveData(data, name = "本地存档") {
   state.activeGroupId = null;
   nextId = data.nextId || Math.max(1, ...state.nodes.map((node) => Number(node.id.replace("node-", "")) || 1)) + 1;
   saveDialog.close();
+  enterGame();
   setStatus(`已读取存档：${name}`, "ok");
   render();
 }
@@ -4251,9 +4632,7 @@ function hydrateNode(node) {
     groupData: node.kind === "group" ? createEmptyGroupData() : null,
     adapterResources: createAdapterResources(node.kind),
     ...node,
-    capacity: node.kind === "warehouse"
-      ? Math.max(node.capacity || 0, WAREHOUSE_CAPACITY)
-      : Math.max(node.capacity || 0, DEVICE_CAPACITY),
+    capacity: Math.max(node.capacity || 0, nodeDefaultCapacity(node.kind)),
     reserve: sourceReserve.reserve,
     initialReserve: sourceReserve.initialReserve
   };
@@ -4334,6 +4713,25 @@ window.addEventListener("keydown", (event) => {
   if ((event.key === "Delete" || event.key === "Backspace") && (deleteSelectedLink() || deleteSelectedNode())) {
     event.preventDefault();
   }
+});
+
+loginForm?.addEventListener("submit", (event) => {
+  event.preventDefault();
+  if (!loginUser?.value.trim() || !loginPassword?.value.trim()) {
+    if (loginError) loginError.textContent = "请输入账号和密码";
+    return;
+  }
+  if (loginError) loginError.textContent = "";
+  showScreen("menu");
+});
+
+document.querySelector("#start-new-game")?.addEventListener("click", startNewGame);
+document.querySelector("#open-load-menu")?.addEventListener("click", () => openSaveDialog("load"));
+document.querySelector("#open-rules")?.addEventListener("click", () => showScreen("rules"));
+document.querySelector("#back-to-menu-from-rules")?.addEventListener("click", () => showScreen("menu"));
+document.querySelector("#back-main-menu")?.addEventListener("click", () => {
+  closeOpenDialogs();
+  showScreen("menu");
 });
 
 document.querySelectorAll(".device-items button[data-kind]").forEach((button) => {

@@ -7,7 +7,133 @@
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <div class="app">
+    <section id="login-screen" class="screen-gate login-screen">
+      <div class="gate-backdrop">
+        <canvas class="factory-menu-canvas" data-menu-canvas aria-hidden="true"></canvas>
+        <div class="menu-network" aria-hidden="true">
+          <div class="menu-line logistics l1"></div>
+          <div class="menu-line logistics l2"></div>
+          <div class="menu-line logistics l3"></div>
+          <div class="menu-line logistics l4"></div>
+          <div class="menu-line power p1"></div>
+          <div class="menu-line power p2"></div>
+          <div class="menu-node source">铁矿源</div>
+          <div class="menu-node miner">采矿机</div>
+          <div class="menu-node furnace">熔炉</div>
+          <div class="menu-node kiln">高温熔炉</div>
+          <div class="menu-node caster">铸造厂</div>
+          <div class="menu-node warehouse">仓库</div>
+          <div class="menu-node generator">发电厂</div>
+          <div class="menu-node pole">电杆</div>
+        </div>
+        <div class="gate-dim"></div>
+      </div>
+      <form class="login-card">
+        <span class="gate-kicker">INDUSTRIAL NETWORK</span>
+        <h1>机械工业时代</h1>
+        <p>登录后进入工厂控制台。当前版本账号密码可任意填写。</p>
+        <label>
+          <span>账号</span>
+          <input id="login-user" autocomplete="username" placeholder="输入账号" />
+        </label>
+        <label>
+          <span>密码</span>
+          <input id="login-password" autocomplete="current-password" type="password" placeholder="输入密码" />
+        </label>
+        <button id="login-submit" type="submit">登录</button>
+        <small id="login-error" class="login-error"></small>
+      </form>
+    </section>
+
+    <section id="main-menu-screen" class="screen-gate main-menu-screen hidden">
+      <div class="gate-backdrop">
+        <canvas class="factory-menu-canvas" data-menu-canvas aria-hidden="true"></canvas>
+        <div class="menu-network complex" aria-hidden="true">
+          <div class="menu-line logistics l1"></div>
+          <div class="menu-line logistics l2"></div>
+          <div class="menu-line logistics l3"></div>
+          <div class="menu-line logistics l4"></div>
+          <div class="menu-line logistics l5"></div>
+          <div class="menu-line logistics l6"></div>
+          <div class="menu-line power p1"></div>
+          <div class="menu-line power p2"></div>
+          <div class="menu-line power p3"></div>
+          <div class="menu-node source">铁矿源</div>
+          <div class="menu-node miner">采矿机</div>
+          <div class="menu-node furnace">熔炉</div>
+          <div class="menu-node kiln">高温熔炉</div>
+          <div class="menu-node caster">铸造厂</div>
+          <div class="menu-node assembler">组装厂</div>
+          <div class="menu-node warehouse">仓库</div>
+          <div class="menu-node generator">发电厂</div>
+          <div class="menu-node pole">电杆</div>
+          <div class="menu-node group">封装组</div>
+        </div>
+        <div class="gate-dim"></div>
+      </div>
+      <div class="main-menu-card">
+        <span class="gate-kicker">FACTORY CONTROL</span>
+        <h1>机械工业时代</h1>
+        <p>搭建矿源、物流、电力与封装产线，推进一阶段核心工业体系。</p>
+        <div class="menu-actions">
+          <button id="start-new-game" type="button">开始新游戏</button>
+          <button id="open-load-menu" type="button">加载游戏</button>
+          <button id="open-rules" type="button">游戏规则介绍</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="rules-screen" class="screen-gate rules-screen hidden">
+      <div class="rules-panel">
+        <div class="rules-head">
+          <div>
+            <span class="gate-kicker">GAME RULES</span>
+            <h1>游戏规则介绍</h1>
+          </div>
+          <button id="back-to-menu-from-rules" type="button">返回主界面</button>
+        </div>
+        <div class="rules-grid">
+          <article>
+            <h2>基础目标</h2>
+            <p>玩家通过搭建采矿、熔炼、铸造、组装与电力网络，逐步生产更高级材料，最终完成机械核心等阶段目标。</p>
+          </article>
+          <article>
+            <h2>节点与端口</h2>
+            <p>节点通过输入口接收资源，通过输出口发出资源。端口会根据节点类型限制可接入的资源和连接类型。</p>
+          </article>
+          <article>
+            <h2>物流规则</h2>
+            <p>物流线负责运输资源包。每个光球代表 1 个资源单位，同一条线会按节奏发包并保持可见间距。</p>
+          </article>
+          <article>
+            <h2>矿源与采矿</h2>
+            <p>矿源拥有固定储量，连接采矿机后才会被开采消耗。采矿机输入矿源，输出对应矿物。</p>
+          </article>
+          <article>
+            <h2>配方与生产</h2>
+            <p>熔炉、高温熔炉、铸造厂与组装厂需要选择配方。材料满足、输出不堵塞且供电正常时会持续生产。</p>
+          </article>
+          <article>
+            <h2>仓库规则</h2>
+            <p>仓库会锁定当前存储资源，清空后解除锁定。仓库输出速度可调整，用于控制下游节奏。</p>
+          </article>
+          <article>
+            <h2>电力规则</h2>
+            <p>发电厂消耗煤供电，电杆可把电力分配到多个设备。电网负载越高风险越大，过载会影响生产。</p>
+          </article>
+          <article>
+            <h2>封装规则</h2>
+            <p>封装组通过封装输入、封装输出和封装电力节点声明组外端口。组内外端口按序号一一对应。</p>
+          </article>
+          <article>
+            <h2>操作方式</h2>
+            <p>拖动画布移动视角，滚轮以鼠标位置为中心缩放。拖拽端口创建连线，Esc 取消拖线，Delete 删除选中对象。</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <div class="app is-hidden">
       <header class="topbar">
         <div class="brand">
           <span class="brand-mark"></span>
@@ -59,6 +185,7 @@
             <button id="demo-line" type="button">测试链路</button>
             <button id="save-game" type="button">存档</button>
             <button id="load-game" type="button">读档</button>
+            <button id="back-main-menu" type="button">主菜单</button>
             <button id="clear-lines" type="button">清除连线</button>
             <button id="delete-selected-link" type="button" disabled>删除选中连线</button>
             <button id="clear-all" type="button">清空节点</button>
@@ -161,6 +288,7 @@
       <div id="goal-reward-body" class="goal-reward-body"></div>
     </dialog>
 
+    <script src="./config/generated/game_config.js"></script>
     <script src="./app.js"></script>
   </body>
 </html>
