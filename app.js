@@ -80,7 +80,7 @@ const recipes = {
   ]
 };
 
-const RECIPE_INPUT_BUFFER_BATCHES = 6;
+const RECIPE_INPUT_BUFFER_BATCHES = 18;
 const SOURCE_RESERVE_MAX = 50000;
 const MINER_OUTPUT_PER_SECOND = 1 / 1.2;
 const DEVICE_CAPACITY = 180;
@@ -233,6 +233,24 @@ function storeBadgesHtml(store) {
       <em>${Math.floor(value)}</em>
     </span>
   `).join("");
+}
+
+function recipeSlotBadgesHtml(node) {
+  const recipe = activeRecipe(node);
+  if (!recipe) return storeBadgesHtml(node.inputStore);
+  return Object.entries(recipe.inputs).map(([key, required]) => {
+    const value = node.inputStore[key] || 0;
+    const limit = recipeInputLimit(recipe, key);
+    const ratio = limit ? value / limit : 0;
+    const stateClass = value < required ? "missing" : ratio >= 0.96 ? "full" : ratio >= 0.78 ? "warn" : "";
+    return `
+      <span class="resource-badge recipe-slot ${stateClass}" title="${resourceName(key)} ${Math.floor(value)} / ${limit}">
+        <i style="background:${resourceColor(key)}"></i>
+        <b>${resourceName(key)}</b>
+        <em>${Math.floor(value)}/${limit}</em>
+      </span>
+    `;
+  }).join("");
 }
 
 function activeRecipe(node) {
@@ -765,18 +783,34 @@ function nodeVisualWidth(node) {
   return node?.kind === "group" ? 236 : 166;
 }
 
+function portMetrics() {
+  if (state.viewport.scale < 0.65) return { portSize: 10, portOffset: 6, powerPortSize: 12 };
+  if (state.viewport.scale < 0.95) return { portSize: 10, portOffset: 6, powerPortSize: 13 };
+  return { portSize: 14, portOffset: 8, powerPortSize: 16 };
+}
+
 function portPosition(node, side, index) {
   const width = nodeVisualWidth(node);
-  if (side === "power-in") return { x: node.x + width - 27, y: node.y - 1 };
-  if (side === "power-out") {
-    const count = activePowerOutputs(node);
-    const top = count > 1 ? 58 + index * 24 : 102;
-    return { x: node.x + width + 8, y: node.y + top };
+  const metrics = portMetrics();
+  if (side === "power-in") {
+    const right = state.viewport.scale < 0.95 ? 14 : 16;
+    const top = state.viewport.scale < 0.65 ? -7 : state.viewport.scale < 0.95 ? -8 : metrics.powerPortSize * -0.55;
+    return {
+      x: node.x + width - right - metrics.powerPortSize / 2,
+      y: node.y + top + metrics.powerPortSize / 2
+    };
   }
-  const top = 48 + index * 22;
+  if (side === "power-out") {
+    const top = powerOutputPortTop(node, index);
+    return {
+      x: node.x + width + metrics.portOffset + metrics.portSize / 2,
+      y: node.y + top + metrics.portSize / 2
+    };
+  }
+  const top = logisticsPortTop(index);
   return {
-    x: node.x + (side === "in" ? -8 : width + 8),
-    y: node.y + top + 7
+    x: node.x + (side === "in" ? -metrics.portOffset + metrics.portSize / 2 : width + metrics.portOffset + metrics.portSize / 2),
+    y: node.y + top + metrics.portSize / 2
   };
 }
 
@@ -1132,7 +1166,7 @@ function renderNodes() {
           <div class="mid-layer">${node.reserve <= 0 ? "消耗殆尽" : "矿源余量"}</div>
           <div class="reserve-progress mid-layer"><span style="width:${Math.floor(sourceReserveRatio(node) * 100)}%; background:${sourceReserveColor(node)}"></span></div>
         ` : ""}
-        <div class="node-store detail-layer"><span>输入</span><div>${storeBadgesHtml(node.inputStore)}</div></div>
+        <div class="node-store detail-layer"><span>${activeRecipe(node) ? "配方缓存" : "输入"}</span><div>${activeRecipe(node) ? recipeSlotBadgesHtml(node) : storeBadgesHtml(node.inputStore)}</div></div>
         <div class="node-store detail-layer"><span>输出</span><div>${storeBadgesHtml(outputStoreFor(node))}</div></div>
       </div>
       ${portsHtml(node)}
@@ -1737,6 +1771,36 @@ function inspectorResourceSection(title, store, capacity) {
   `;
 }
 
+function recipeInputSlotsSection(node) {
+  const recipe = activeRecipe(node);
+  if (!recipe) return inspectorResourceSection("输入缓存", node.inputStore, node.capacity);
+  const rows = Object.entries(recipe.inputs).map(([resource, required]) => {
+    const amount = node.inputStore[resource] || 0;
+    const limit = recipeInputLimit(recipe, resource);
+    const width = Math.min(100, Math.round((amount / Math.max(1, limit)) * 100));
+    const stateText = amount < required ? "缺料" : amount >= limit ? "已满" : `${Math.floor(amount)} / ${limit}`;
+    return `
+      <div class="resource-visual-row">
+        <div class="resource-visual-top">
+          <i style="background:${resourceColor(resource)}"></i>
+          <span>${resourceName(resource)}</span>
+          <b>${stateText}</b>
+        </div>
+        <div class="resource-visual-bar" style="color:${resourceColor(resource)}"><i style="width:${width}%"></i></div>
+      </div>
+    `;
+  }).join("");
+  return `
+    <div class="inspector-section">
+      <div class="inspector-section-title">
+        <span>配方缓存</span>
+        <small>${RECIPE_INPUT_BUFFER_BATCHES} 批材料槽</small>
+      </div>
+      <div class="resource-visual-list">${rows}</div>
+    </div>
+  `;
+}
+
 function productionVisualHtml(node) {
   if (node.kind === "source") {
     const ratio = sourceReserveRatio(node);
@@ -1888,7 +1952,7 @@ function renderInspector() {
       ${inspectorTagsHtml(node, runState)}
       ${productionVisualHtml(node)}
       ${groupPanel}
-      ${inspectorResourceSection("输入缓存", node.inputStore, node.capacity)}
+      ${recipeInputSlotsSection(node)}
       ${inspectorResourceSection("输出缓存", outputStoreFor(node), node.capacity)}
       ${powerVisualHtml(node)}
       ${connectionsVisualHtml(node, inputCount, outputCount)}
@@ -2521,7 +2585,7 @@ function goalDefinitions(totals = collectResourceTotals()) {
 
 function currentGoal(totals = collectResourceTotals()) {
   const goals = goalDefinitions(totals);
-  return goals.find((goal) => !goal.done) || goals[goals.length - 1];
+  return goals.find((goal) => !goal.done && !state.claimedGoalRewards[goal.id]) || goals[goals.length - 1];
 }
 
 function rewardText(reward) {
@@ -2809,7 +2873,7 @@ function goalDefinitions(totals = collectResourceTotals()) {
 
 function currentGoal(totals = collectResourceTotals()) {
   const goals = goalDefinitions(totals);
-  return goals.find((goal) => !goal.done) || goals[goals.length - 1];
+  return goals.find((goal) => !goal.done && !state.claimedGoalRewards[goal.id]) || goals[goals.length - 1];
 }
 
 function rewardText(reward) {

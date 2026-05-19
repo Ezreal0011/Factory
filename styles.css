@@ -15,6 +15,9 @@
   --state-warn: #f6c84c;
   --state-power: #ffe45c;
   --state-logistics: #58b7ff;
+  --port-size: 14px;
+  --port-offset: 8px;
+  --power-port-size: 16px;
 }
 
 * {
@@ -455,7 +458,14 @@ button {
 
 .canvas.zoom-far .port.power-in,
 .canvas.zoom-far .port.power-out {
-  transform: scale(0.82);
+  --port-size: 10px;
+  --port-offset: 6px;
+  --power-port-size: 12px;
+}
+
+.canvas.zoom-far .port.power-in {
+  right: 14px;
+  top: -7px;
 }
 
 .canvas.zoom-mid .node {
@@ -488,18 +498,26 @@ button {
 }
 
 .canvas.zoom-mid .port.in,
-.canvas.zoom-mid .port.out {
-  width: 10px;
-  height: 10px;
+.canvas.zoom-mid .port.out,
+.canvas.zoom-mid .port.power-in,
+.canvas.zoom-mid .port.power-out {
+  --port-size: 10px;
+  --port-offset: 6px;
+  --power-port-size: 13px;
   border-width: 2px;
 }
 
+.canvas.zoom-mid .port.power-in {
+  right: 14px;
+  top: -8px;
+}
+
 .canvas.zoom-mid .port.in {
-  left: -6px;
+  left: calc(var(--port-offset) * -1);
 }
 
 .canvas.zoom-mid .port.out {
-  right: -6px;
+  right: calc(var(--port-offset) * -1);
 }
 
 .canvas.zoom-near .node {
@@ -918,6 +936,25 @@ button {
   font-weight: 800;
 }
 
+.resource-badge.recipe-slot {
+  border-color: rgba(88, 183, 255, 0.3);
+}
+
+.resource-badge.recipe-slot.missing {
+  border-color: rgba(255, 96, 112, 0.48);
+  color: #ffd7dc;
+}
+
+.resource-badge.recipe-slot.warn {
+  border-color: rgba(246, 200, 76, 0.5);
+  color: #ffe38c;
+}
+
+.resource-badge.recipe-slot.full {
+  border-color: rgba(126, 240, 178, 0.48);
+  color: #dfffea;
+}
+
 .resource-empty {
   color: #5e778a;
 }
@@ -1000,8 +1037,15 @@ button {
 
 .port {
   position: absolute;
-  width: 14px;
-  height: 14px;
+  width: var(--port-size);
+  height: var(--port-size);
+  min-width: var(--port-size);
+  max-width: var(--port-size);
+  min-height: var(--port-size);
+  max-height: var(--port-size);
+  aspect-ratio: 1 / 1;
+  box-sizing: border-box;
+  padding: 0;
   border: 2px solid #a5dfff;
   background: #06111c;
   cursor: crosshair;
@@ -1010,53 +1054,67 @@ button {
 }
 
 .port.in {
-  left: -8px;
+  left: calc(var(--port-offset) * -1);
   border-color: var(--state-logistics);
 }
 
 .port.out {
-  right: -8px;
+  right: calc(var(--port-offset) * -1);
   border-color: var(--state-warn);
 }
 
 .port.power-in {
-  width: 22px;
-  height: 22px;
+  width: var(--power-port-size);
+  height: var(--power-port-size);
+  min-width: var(--power-port-size);
+  max-width: var(--power-port-size);
+  min-height: var(--power-port-size);
+  max-height: var(--power-port-size);
   right: 16px;
-  top: -12px;
+  top: calc(var(--power-port-size) * -0.55);
   border-color: #fff1a3;
-  background: radial-gradient(circle at 50% 42%, #fff7b8 0 24%, #f5cb39 25% 48%, #523f0b 49% 100%);
-  border-radius: 50%;
-  box-shadow: 0 0 0 3px rgba(6, 17, 28, 0.9), 0 0 15px rgba(255, 228, 92, 0.75);
+  background: #06111c;
+  box-shadow: 0 0 0 2px rgba(6, 17, 28, 0.9), 0 0 12px rgba(255, 228, 92, 0.65);
   z-index: 2;
 }
 
 .port.power-in::before {
-  content: "";
+  content: "⚡";
   position: absolute;
-  left: 7px;
-  top: 3px;
-  width: 8px;
-  height: 14px;
-  background: #07111c;
-  clip-path: polygon(46% 0, 100% 0, 62% 42%, 100% 42%, 28% 100%, 44% 56%, 0 56%);
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: #ffe45c;
+  font-size: calc(var(--power-port-size) * 0.72);
+  line-height: 1;
   pointer-events: none;
 }
 
 .port.power-in::after {
   content: "";
   position: absolute;
-  inset: -7px;
+  inset: -5px;
   border: 1px solid rgba(255, 228, 92, 0.55);
   border-radius: 50%;
   pointer-events: none;
 }
 
 .port.power-out {
-  right: -8px;
+  right: calc(var(--port-offset) * -1);
   top: 95px;
   border-color: var(--state-power);
   box-shadow: 0 0 0 2px rgba(6, 17, 28, 0.88), 0 0 10px rgba(255, 228, 92, 0.55);
+}
+
+.port.power-out::before {
+  content: "";
+  position: absolute;
+  inset: 3px;
+  border-radius: 50%;
+  background: var(--state-power);
+  box-shadow: 0 0 8px rgba(255, 228, 92, 0.7);
+  opacity: 0.76;
+  pointer-events: none;
 }
 
 .port.hot {
@@ -1067,6 +1125,11 @@ button {
 .port.used {
   opacity: 0.9;
   background: currentColor;
+}
+
+.port.power-in.used,
+.port.power-out.used {
+  background: rgba(255, 228, 92, 0.18);
 }
 
 .port.closed {
