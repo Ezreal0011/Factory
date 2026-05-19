@@ -92,6 +92,7 @@ const LOGISTICS_PACKET_LIMIT = 10;
 const LOGISTICS_WARN_PACKETS = 7;
 const LOGISTICS_WARN_EFFICIENCY = 80;
 const LOGISTICS_DANGER_EFFICIENCY = 50;
+const LOGISTICS_PACKET_SPACING = 18;
 const ADAPTER_PORT_CAPACITY = 1;
 const SAVE_INDEX_KEY = "factory-save-slots-v1";
 const LEGACY_SAVE_KEY = "factory-save-v1";
@@ -112,6 +113,7 @@ const state = {
   lineView: "all",
   alertFilter: "all",
   lastMonitorRender: 0,
+  lastInspectorRender: 0,
   lastGroupClick: { id: null, at: 0 },
   pointer: { x: 0, y: 0 },
   viewport: { x: 0, y: 0, scale: 1 },
@@ -151,6 +153,7 @@ const powerOverview = document.querySelector("#power-overview");
 const logisticsOverview = document.querySelector("#logistics-overview");
 const alertsPanel = document.querySelector("#alerts");
 const goalPanel = document.querySelector("#goal-panel");
+const missionStrip = document.querySelector("#mission-strip");
 const statusLine = document.querySelector("#status");
 const deleteSelectedLinkButton = document.querySelector("#delete-selected-link");
 const warehouseDialog = document.querySelector("#warehouse-dialog");
@@ -162,8 +165,33 @@ const saveNameInput = document.querySelector("#save-name-input");
 const recipeDialog = document.querySelector("#recipe-dialog");
 const recipeDialogContent = document.querySelector("#recipe-dialog-content");
 const recipeDialogSubtitle = document.querySelector("#recipe-dialog-subtitle");
+const goalRewardDialog = document.querySelector("#goal-reward-dialog");
+const goalRewardTitle = document.querySelector("#goal-reward-title");
+const goalRewardBody = document.querySelector("#goal-reward-body");
+const closeGoalRewardButton = document.querySelector("#close-goal-reward");
 
 let saveDialogMode = "save";
+
+Object.assign(resources, {
+  adapter_input_device: { name: "封装输入设备", color: "#9bdcff" },
+  adapter_output_device: { name: "封装输出设备", color: "#ffe45c" },
+  adapter_power_device: { name: "封装电力设备", color: "#fff176" }
+});
+
+recipes.assembler.push(
+  { name: "封装输入设备", inputs: { iron_plate: 2, copper_wire: 1 }, output: "adapter_input_device", amount: 1, time: 4 },
+  { name: "封装输出设备", inputs: { iron_plate: 2, copper_wire: 1 }, output: "adapter_output_device", amount: 1, time: 4 },
+  { name: "封装电力设备", inputs: { iron_rod: 1, copper_wire: 2, cable: 1 }, output: "adapter_power_device", amount: 1, time: 4.5 }
+);
+
+for (const recipe of [...recipes.furnace, ...recipes.kiln, ...recipes.caster, ...recipes.assembler]) {
+  if (recipe.output === "iron_ingot" || recipe.output === "copper_ingot") recipe.time = 3;
+  if (recipe.output === "glass") recipe.time = 2.8;
+  if (recipe.output === "steel_ingot") recipe.time = 5;
+  if (["iron_plate", "iron_rod", "copper_plate", "copper_rod", "steel_plate", "steel_rod"].includes(recipe.output)) recipe.time = 2.5;
+  if (recipe.output === "copper_wire") recipe.time = 2.6;
+  if (recipe.output === "mechanical_core") recipe.time = 11;
+}
 
 function setStatus(text, type = "") {
   statusLine.textContent = text;
@@ -361,19 +389,38 @@ function pruneAdapterPortBindings() {
   for (const group of state.nodes.filter((node) => node.kind === "group")) rebuildGroupInterfaces(group);
 }
 
+function newNodePosition(kind) {
+  const rect = canvas.getBoundingClientRect();
+  const scale = state.viewport.scale || 1;
+  const centerX = (rect.width / 2 - state.viewport.x) / scale;
+  const centerY = (rect.height / 2 - state.viewport.y) / scale;
+  const siblings = state.nodes.filter((node) => node.groupId === state.activeGroupId).length;
+  const offsets = [[0, 0], [34, 28], [-34, 28], [34, -28], [-34, -28], [68, 0], [-68, 0], [0, 56], [0, -56]];
+  const [offsetX, offsetY] = offsets[siblings % offsets.length];
+  const width = kind === "group" ? 236 : 166;
+  const height = kind === "group" ? 176 : 250;
+  const visibleLeft = -state.viewport.x / scale;
+  const visibleTop = -state.viewport.y / scale;
+  const visibleRight = (rect.width - state.viewport.x) / scale;
+  const visibleBottom = (rect.height - state.viewport.y) / scale;
+  return {
+    x: clamp(Math.round(centerX - width / 2 + offsetX), visibleLeft + 16, visibleRight - width - 16),
+    y: clamp(Math.round(centerY - height / 2 + offsetY), visibleTop + 16, visibleBottom - height - 16)
+  };
+}
+
 function addNode(kind, resource = null) {
   if (kind !== "source" && state.inventory[kind] !== undefined && (state.inventory[kind] || 0) <= 0) {
     setStatus(`${nodeTypes[kind].name} 库存不足`, "error");
     return;
   }
-  const rect = canvas.getBoundingClientRect();
-  const count = state.nodes.length;
+  const position = newNodePosition(kind);
   const node = {
     id: `node-${nextId++}`,
     kind,
     resource,
-    x: 90 + (count % 4) * 190,
-    y: 90 + Math.floor(count / 4) * 150,
+    x: position.x,
+    y: position.y,
     inputStore: {},
     outputStore: {},
     reserve: kind === "source" ? SOURCE_RESERVE_MAX : 0,
@@ -397,8 +444,6 @@ function addNode(kind, resource = null) {
     adapterPortStores: createAdapterPortStores(kind),
     capacity: kind === "warehouse" ? WAREHOUSE_CAPACITY : DEVICE_CAPACITY
   };
-  node.x = Math.min(node.x, rect.width - 210);
-  node.y = Math.min(node.y, rect.height - 150);
   state.nodes.push(node);
   if (kind !== "source" && state.inventory[kind] !== undefined) state.inventory[kind] -= 1;
   setSingleSelection(node.id);
@@ -1001,6 +1046,39 @@ function renderInventory() {
   if (cableBadge) cableBadge.textContent = state.cableStock;
 }
 
+function nodeRecipeSwitchHtml(node) {
+  const list = recipes[node.kind];
+  const recipe = activeRecipe(node);
+  if (!list || !recipe) return "";
+  return `
+    <div class="node-recipe-switch detail-layer" data-node-recipe="${node.id}">
+      <button data-recipe-step="-1" type="button" title="上一个配方">‹</button>
+      <span data-open-node-recipe="true" title="打开配方选择">${recipe.name}</span>
+      <button data-recipe-step="1" type="button" title="下一个配方">›</button>
+    </div>
+  `;
+}
+
+function setNodeRecipe(node, recipeIndex) {
+  const list = recipes[node.kind];
+  if (!list || !list.length) return false;
+  const nextIndex = (recipeIndex + list.length) % list.length;
+  if (nextIndex === node.recipeIndex) return false;
+  node.recipeIndex = nextIndex;
+  node.progress = 0;
+  cleanInputForRecipe(node);
+  refreshIncomingRecipeLinks(node);
+  setStatus(`${nodeTitle(node)} 已切换配方：${activeRecipe(node).name}`, "ok");
+  render();
+  return true;
+}
+
+function stepNodeRecipe(nodeId, direction) {
+  const node = nodeById(nodeId);
+  if (!node || !recipes[node.kind]) return;
+  setNodeRecipe(node, node.recipeIndex + direction);
+}
+
 function setDeviceTab(group) {
   document.querySelectorAll("[data-device-tab]").forEach((button) => {
     button.classList.toggle("active", button.dataset.deviceTab === group);
@@ -1025,7 +1103,7 @@ function renderNodes() {
     const dimClass = focus && !focus.nodeIds.has(node.id) ? "dimmed-node" : "";
     const relationRole = focusRole(node.id, focus);
     const element = document.createElement("article");
-    element.className = `node state-${runState.key} ${powerClass} ${dimClass} ${isNodeSelected(node.id) ? "selected" : ""} ${state.selectedIds.length > 1 && isNodeSelected(node.id) ? "multi-selected" : ""}`;
+    element.className = `node kind-${node.kind} state-${runState.key} ${powerClass} ${dimClass} ${isNodeSelected(node.id) ? "selected" : ""} ${state.selectedIds.length > 1 && isNodeSelected(node.id) ? "multi-selected" : ""}`;
     element.dataset.id = node.id;
     element.style.left = `${node.x}px`;
     element.style.top = `${node.y}px`;
@@ -1041,6 +1119,7 @@ function renderNodes() {
         <div class="run-state ${runState.key}">运行状态 ${runState.label}</div>
         ${activeRecipe(node) ? `
           <div class="node-recipe mid-layer">配方 ${activeRecipe(node).name}</div>
+          ${nodeRecipeSwitchHtml(node)}
           <div class="node-progress mid-layer"><span style="width:${Math.floor(node.progress * 100)}%"></span></div>
         ` : ""}
         ${node.kind === "miner" ? `
@@ -1420,14 +1499,20 @@ function appendPath(d, className, linkId = null, resource = null, linkType = "lo
 
 function renderPackets(link, points, muted = false, focusDimmed = false) {
   const length = polylineLength(points);
-  for (const packet of link.packets) {
-    const point = pointOnPolylineDistance(points, packet.distance || packet.progress * length || 0);
+  const packets = link.packets
+    .map((packet) => ({ packet, distance: clamp(packet.distance || packet.progress * length || 0, 0, length * 0.985) }))
+    .sort((a, b) => a.distance - b.distance);
+  let previousDistance = -LOGISTICS_PACKET_SPACING;
+  for (const item of packets) {
+    const visualDistance = Math.max(item.distance, previousDistance + LOGISTICS_PACKET_SPACING);
+    previousDistance = Math.min(visualDistance, length * 0.985);
+    const point = pointOnPolylineDistance(points, previousDistance);
     const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
     circle.setAttribute("cx", point.x);
     circle.setAttribute("cy", point.y);
-    circle.setAttribute("r", 4);
+    circle.setAttribute("r", 5);
     circle.setAttribute("class", `packet ${muted ? "muted-line" : ""} ${focusDimmed ? "focus-dimmed-packet" : ""}`);
-    circle.setAttribute("fill", resourceColor(packet.resource));
+    circle.setAttribute("fill", resourceColor(item.packet.resource));
     linksLayer.appendChild(circle);
   }
 }
@@ -1514,6 +1599,7 @@ function renderInspector() {
     });
   });
   document.querySelectorAll("[data-output-limit]").forEach((input) => {
+    bindWarehouseLimitSlider(node, input);
     input.addEventListener("change", () => {
       const index = Number(input.dataset.outputLimit);
       node.outputLimits[index] = Math.max(0, Number(input.value) || 0);
@@ -1565,6 +1651,261 @@ function groupSummaryHtml(group) {
     <div class="info-row"><span>分组输出</span><b>${outputs}</b></div>
     <div class="info-row"><span>分组电力</span><b>${data.powerInput ? "已声明" : "无"}</b></div>
   `;
+}
+
+function statusLabelForInspector(key) {
+  return {
+    idle: "未启动",
+    running: "启动",
+    paused: "暂停",
+    warn: "异常",
+    danger: "异常",
+    off: "离线"
+  }[key] || "未启动";
+}
+
+function pauseReasonForInspector(node) {
+  const runState = nodeRunState(node);
+  if (runState.key !== "paused") return "";
+  if (node.kind === "group") return "组内有暂停节点";
+  if (nodeTypes[node.kind]?.adapter) return adapterHasBlockedOutput(node) ? "接口堵塞" : "等待连接";
+  if (node.kind === "source") return node.reserve <= 0 ? "矿源耗尽" : "未接输出";
+  if (node.kind === "warehouse") {
+    if (storeTotal(node.inputStore) >= node.capacity) return "仓库已满";
+    if (!state.links.some((link) => link.fromNode === node.id || link.toNode === node.id)) return "未接线路";
+    return "等待资源";
+  }
+  if (node.kind === "generator") return (node.inputStore.coal || 0) > 0 ? "未接电网" : "缺少煤矿";
+  if (node.kind === "miner") {
+    if (storeTotal(node.outputStore) >= node.capacity) return "输出堵塞";
+    if (!state.links.some((link) => link.toNode === node.id)) return "未接矿源";
+    return "缺少矿源";
+  }
+  const recipe = activeRecipe(node);
+  if (recipe) {
+    if (storeTotal(node.outputStore) >= node.capacity) return "输出堵塞";
+    if (recipe.requiresPower && !node.powered) return "缺少电力";
+    const missing = Object.entries(recipe.inputs)
+      .filter(([key, amount]) => (node.inputStore[key] || 0) < amount)
+      .map(([key]) => resourceName(key));
+    if (missing.length) return `缺少${missing.join("、")}`;
+    if (!state.links.some((link) => link.toNode === node.id)) return "未接输入";
+    return "等待材料";
+  }
+  if ((nodeTypes[node.kind].powerIn || nodeTypes[node.kind].powerOut) && !node.powered) return "未接电力";
+  return "暂停";
+}
+
+function inspectorTagsHtml(node, runState) {
+  const tags = [{ text: statusLabelForInspector(runState.key), type: runState.key }];
+  const reason = pauseReasonForInspector(node);
+  if (reason) tags.push({ text: reason, type: "reason" });
+  if (nodeTypes[node.kind]?.powerIn) tags.push({ text: node.powered ? "已供电" : "未供电", type: node.powered ? "running" : "danger" });
+  if (node.kind === "source" && node.reserve <= 0) tags.push({ text: "消耗殆尽", type: "danger" });
+  return `<div class="inspector-tags">${tags.map((tag) => `<span class="inspector-tag ${tag.type}">${tag.text}</span>`).join("")}</div>`;
+}
+
+function storeVisualRows(store, capacity = DEVICE_CAPACITY) {
+  const entries = Object.entries(store || {}).filter(([, amount]) => amount > 0.001);
+  if (!entries.length) return `<div class="resource-empty-row">空</div>`;
+  const max = Math.max(capacity || DEVICE_CAPACITY, ...entries.map(([, amount]) => amount), 1);
+  return entries.map(([resource, amount]) => {
+    const width = Math.min(100, Math.max(2, Math.round((amount / max) * 100)));
+    const amountText = Number.isInteger(amount) ? amount : amount.toFixed(1);
+    return `
+      <div class="resource-visual-row">
+        <div class="resource-visual-top">
+          <i style="background:${resourceColor(resource)}"></i>
+          <span>${resourceName(resource)}</span>
+          <b>${amountText}</b>
+        </div>
+        <div class="resource-visual-bar" style="color:${resourceColor(resource)}"><i style="width:${width}%"></i></div>
+      </div>
+    `;
+  }).join("");
+}
+
+function inspectorResourceSection(title, store, capacity) {
+  return `
+    <div class="inspector-section">
+      <div class="inspector-section-title">
+        <span>${title}</span>
+        <small>${Math.floor(storeTotal(store || {}))}/${capacity || DEVICE_CAPACITY}</small>
+      </div>
+      <div class="resource-visual-list">${storeVisualRows(store, capacity)}</div>
+    </div>
+  `;
+}
+
+function productionVisualHtml(node) {
+  if (node.kind === "source") {
+    const ratio = sourceReserveRatio(node);
+    return `
+      <div class="inspector-section">
+        <div class="inspector-section-title"><span>矿源余量</span><small>${Math.floor(node.reserve)}/${node.initialReserve || SOURCE_RESERVE_MAX}</small></div>
+        <div class="inspector-progress"><i style="width:${Math.round(ratio * 100)}%; background:${sourceReserveColor(node)}"></i></div>
+      </div>
+    `;
+  }
+  const recipe = activeRecipe(node);
+  if (recipe) {
+    return `
+      <div class="inspector-section">
+        <div class="inspector-section-title"><span>生产进度</span><small>${recipe.name}</small></div>
+        <div class="inspector-progress"><i style="width:${Math.round((node.progress || 0) * 100)}%"></i></div>
+        <div class="connection-pills">
+          <div class="connection-pill"><span>产物</span><b>${resourceName(recipe.output)}</b></div>
+          <div class="connection-pill"><span>效率</span><b>${node.powered && !recipe.requiresPower ? "150%" : "100%"}</b></div>
+        </div>
+      </div>
+    `;
+  }
+  if (node.kind === "miner") {
+    return `
+      <div class="inspector-section">
+        <div class="inspector-section-title"><span>采矿进度</span><small>${node.miningResource ? resourceName(node.miningResource) : "等待矿源"}</small></div>
+        <div class="inspector-progress"><i style="width:${Math.round((node.progress || 0) * 100)}%"></i></div>
+      </div>
+    `;
+  }
+  if (node.kind === "generator") {
+    return `
+      <div class="inspector-section">
+        <div class="inspector-section-title"><span>发电状态</span><small>${node.generating ? "正在供电" : "等待燃料"}</small></div>
+        <div class="connection-pills">
+          <div class="connection-pill"><span>输出</span><b>${nodeTypes.generator.generation}</b></div>
+          <div class="connection-pill"><span>煤矿</span><b>${Math.floor(node.inputStore.coal || 0)}</b></div>
+        </div>
+      </div>
+    `;
+  }
+  return "";
+}
+
+function powerVisualHtml(node) {
+  if (!nodeTypes[node.kind].powerIn && !nodeTypes[node.kind].powerOut && node.kind !== "group") return "";
+  const incoming = state.powerLinks.find((link) => link.toNode === node.id);
+  const outgoing = state.powerLinks.filter((link) => link.fromNode === node.id);
+  const outLoad = outgoing.reduce((sum, link) => sum + (link.load || 0), 0);
+  return `
+    <div class="inspector-section">
+      <div class="inspector-section-title"><span>电力</span><small>${node.powered || node.generating ? "在线" : "离线"}</small></div>
+      <div class="connection-pills">
+        <div class="connection-pill"><span>输入负载</span><b>${incoming ? `${incoming.load || 0}/${incoming.capacity}` : "无"}</b></div>
+        <div class="connection-pill"><span>输出负载</span><b>${outLoad}</b></div>
+      </div>
+    </div>
+  `;
+}
+
+function connectionsVisualHtml(node, inputCount, outputCount) {
+  return `
+    <div class="inspector-section">
+      <div class="inspector-section-title"><span>连接</span><small>${Math.round(node.x)}, ${Math.round(node.y)}</small></div>
+      <div class="connection-pills">
+        <div class="connection-pill"><span>输入</span><b>${inputCount}/${activeInputs(node)}</b></div>
+        <div class="connection-pill"><span>输出</span><b>${outputCount}/${activeOutputs(node)}</b></div>
+      </div>
+    </div>
+  `;
+}
+
+function bindInspectorControls(node) {
+  document.querySelector("#delete-selected-node")?.addEventListener("click", deleteSelectedNode);
+  document.querySelector("#enter-group")?.addEventListener("click", () => enterGroup(node.id));
+  document.querySelector("#ungroup-node")?.addEventListener("click", () => ungroupNode(node.id));
+  document.querySelector("#exit-group")?.addEventListener("click", exitGroup);
+  document.querySelector("#open-recipe-dialog")?.addEventListener("click", () => openRecipeDialog(node.id));
+  document.querySelectorAll("[data-warehouse-toggle]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const [side, rawIndex] = button.dataset.warehouseToggle.split(":");
+      const index = Number(rawIndex);
+      const list = side === "in" ? node.inputOpen : node.outputOpen;
+      list[index] = !list[index];
+      setStatus(`仓库${side === "in" ? "输入" : "输出"}口 ${index + 1} 已${list[index] ? "开启" : "关闭"}`, "ok");
+      render();
+    });
+  });
+  document.querySelectorAll("[data-output-limit]").forEach((input) => {
+    bindWarehouseLimitSlider(node, input);
+    input.addEventListener("change", () => {
+      const index = Number(input.dataset.outputLimit);
+      node.outputLimits[index] = Math.max(0, Number(input.value) || 0);
+      setStatus(`仓库输出口 ${index + 1} 限流已更新`, "ok");
+    });
+  });
+  document.querySelectorAll("[data-cache-action]").forEach((button) => {
+    button.addEventListener("click", () => {
+      if (button.dataset.cacheAction === "input") {
+        node.inputStore = {};
+        if (node.kind === "warehouse") node.warehouseResource = null;
+      } else {
+        node.outputStore = {};
+      }
+      node.progress = 0;
+      setStatus(`${nodeTitle(node)} 缓存已清空`, "ok");
+      render();
+    });
+  });
+}
+
+function renderInspector() {
+  if (state.selectedIds.length > 1) {
+    renderMultiSelectionInspector();
+    return;
+  }
+  const node = nodeById(state.selectedId);
+  if (!node) {
+    renderLinkInspector();
+    return;
+  }
+  const type = nodeTypes[node.kind];
+  const runState = nodeRunState(node);
+  const inputCount = state.links.filter((link) => link.toNode === node.id).length;
+  const outputCount = state.links.filter((link) => link.fromNode === node.id).length;
+  const groupActions = node.kind === "group" ? `
+    <div class="cache-actions">
+      <button id="enter-group" type="button">进入分组</button>
+      <button id="ungroup-node" class="danger" type="button">取消分组</button>
+    </div>
+  ` : "";
+  const exitGroupAction = state.activeGroupId ? `<button class="inspector-action" id="exit-group" type="button">返回上级画布</button>` : "";
+  const groupPanel = node.kind === "group" ? `
+    <div class="inspector-section">
+      <div class="inspector-section-title"><span>封装端口</span><small>由组内接口节点决定</small></div>
+      ${groupInterfacePanelHtml(rebuildGroupInterfaces(node))}
+    </div>
+  ` : "";
+  inspector.innerHTML = `
+    <div class="node-inspector-card">
+      <div class="node-inspector-head">
+        <div>
+          <span class="inspector-kicker">${type.name}</span>
+          <h3>${nodeTitle(node)}</h3>
+        </div>
+        <b class="inspector-state ${runState.key}">${statusLabelForInspector(runState.key)}</b>
+      </div>
+      ${inspectorTagsHtml(node, runState)}
+      ${productionVisualHtml(node)}
+      ${groupPanel}
+      ${inspectorResourceSection("输入缓存", node.inputStore, node.capacity)}
+      ${inspectorResourceSection("输出缓存", outputStoreFor(node), node.capacity)}
+      ${powerVisualHtml(node)}
+      ${connectionsVisualHtml(node, inputCount, outputCount)}
+      <div class="inspector-detail-actions">
+        ${recipeControlHtml(node)}
+        ${warehouseControlHtml(node)}
+        <div class="cache-actions">
+          <button data-cache-action="input" type="button">清空输入</button>
+          <button data-cache-action="output" type="button">清空输出</button>
+        </div>
+        ${groupActions}
+        ${exitGroupAction}
+        <button class="inspector-action danger" id="delete-selected-node" type="button">删除选中节点</button>
+      </div>
+    </div>
+  `;
+  bindInspectorControls(node);
 }
 
 function createGroupFromSelection() {
@@ -1992,6 +2333,49 @@ function warehouseControlHtml(node) {
   `;
 }
 
+function warehouseControlHtml(node) {
+  if (node.kind !== "warehouse") return "";
+  const inputButtons = node.inputOpen.map((open, index) => `<button class="${open ? "" : "off"}" data-warehouse-toggle="in:${index}" type="button">入${index + 1}</button>`).join("");
+  const outputButtons = node.outputOpen.map((open, index) => `<button class="${open ? "" : "off"}" data-warehouse-toggle="out:${index}" type="button">出${index + 1}</button>`).join("");
+  const limitInputs = node.outputLimits.map((value, index) => {
+    const disabled = node.outputOpen[index] ? "" : "disabled";
+    const stateText = !node.outputOpen[index] ? "关闭" : value <= 0 ? "暂停" : `${Number(value).toFixed(1)}/秒`;
+    return `
+      <label class="warehouse-limit-row ${node.outputOpen[index] ? "" : "off"}">
+        <span>出${index + 1}</span>
+        <input data-output-limit="${index}" min="0" max="4" step="0.5" type="range" value="${value}" ${disabled}>
+        <b data-output-limit-value="${index}">${stateText}</b>
+      </label>
+    `;
+  }).join("");
+  return `
+    <div class="info-row"><span>锁定资源</span><b>${resourceName(node.warehouseResource)}</b></div>
+    <div class="warehouse-switches">${inputButtons}${outputButtons}</div>
+    <div class="warehouse-limits">${limitInputs}</div>
+  `;
+}
+
+function outputLimitText(node, index, value = node.outputLimits[index]) {
+  if (!node.outputOpen[index]) return "关闭";
+  return Number(value) <= 0 ? "暂停" : `${Number(value).toFixed(1)}/秒`;
+}
+
+function bindWarehouseLimitSlider(node, input) {
+  const index = Number(input.dataset.outputLimit);
+  const valueLabel = document.querySelector(`[data-output-limit-value="${index}"]`);
+  const sync = () => {
+    const value = Math.max(0, Number(input.value) || 0);
+    node.outputLimits[index] = value;
+    if (valueLabel) valueLabel.textContent = outputLimitText(node, index, value);
+  };
+  input.addEventListener("input", sync);
+  input.addEventListener("change", (event) => {
+    sync();
+    setStatus(`仓库输出口 ${index + 1} 限流已更新：${outputLimitText(node, index)}`, "ok");
+    event.stopImmediatePropagation();
+  });
+}
+
 function renderLinkInspector() {
   if (!state.selectedLinkId) {
     inspector.innerHTML = state.activeGroupId
@@ -2191,6 +2575,16 @@ function renderGoals() {
   const goal = currentGoal(totals);
   const index = goals.findIndex((item) => item.id === goal.id);
   const progress = goal.target ? Math.min(100, Math.floor((goal.progress / goal.target) * 100)) : 100;
+  if (missionStrip) {
+    const nextStep = (goal.steps || []).find((step) => !step.done);
+    missionStrip.innerHTML = `
+      <div>
+        <b>${goal.title}</b>
+        <span>${nextStep ? nextStep.text : goal.detail}</span>
+      </div>
+      <strong>${Math.floor(goal.progress)} / ${goal.target}</strong>
+    `;
+  }
   goalPanel.innerHTML = `
     <div class="goal-stage">阶段 ${index + 1} / ${goals.length}</div>
     <div class="goal-title">${goal.title}</div>
@@ -2198,6 +2592,307 @@ function renderGoals() {
     <div class="goal-progress"><span style="width:${progress}%"></span></div>
     <div class="info-row"><span>进度</span><b>${Math.floor(goal.progress)} / ${goal.target}</b></div>
     <div class="info-row"><span>完成奖励</span><b>${rewardText(goal.reward)}</b></div>
+    <div class="goal-hints">
+      ${goalHints(totals).map((hint) => `<div>${hint}</div>`).join("")}
+    </div>
+  `;
+}
+
+function deviceFromResource(resource) {
+  return {
+    miner_device: "miner",
+    furnace_device: "furnace",
+    kiln_device: "kiln",
+    caster_device: "caster",
+    assembler_device: "assembler",
+    generator_device: "generator",
+    pole_device: "pole",
+    warehouse_device: "warehouse",
+    adapter_input_device: "adapter_input",
+    adapter_output_device: "adapter_output",
+    adapter_power_device: "adapter_power"
+  }[resource] || null;
+}
+
+function warehouseHasResource(resource, amount = 1) {
+  return state.nodes.some((node) => node.kind === "warehouse" && (node.inputStore[resource] || 0) >= amount);
+}
+
+function hasResourceLink(fromKind, toKind, resource = null) {
+  return state.links.some((link) => {
+    const from = nodeById(link.fromNode);
+    const to = nodeById(link.toNode);
+    return from?.kind === fromKind && to?.kind === toKind && (!resource || link.resource === resource || from.resource === resource);
+  });
+}
+
+function hasPoweredIndustryTarget(kind, count = 1) {
+  const targets = state.nodes.filter((node) => node.kind === kind && node.powered);
+  return targets.length >= count;
+}
+
+function groupHasAdapter(kind) {
+  return state.nodes.some((group) => group.kind === "group" && adapterNodeInGroup(group, kind));
+}
+
+function groupHasDeclaredPorts() {
+  return state.nodes.some((group) => {
+    if (group.kind !== "group") return false;
+    const data = rebuildGroupInterfaces(group);
+    return data.inputs.length > 0 && data.outputs.length > 0;
+  });
+}
+
+function workingGroupSteelLine() {
+  return countNodes("group") > 0
+    && groupHasDeclaredPorts()
+    && productionTotal("steel_ingot") >= 25
+    && warehouseHasResource("steel_ingot", 1);
+}
+
+function groupPowerConnected() {
+  return state.nodes.some((powerAdapter) => {
+    if (powerAdapter.kind !== "adapter_power") return false;
+    const poweredTargets = state.powerLinks
+      .filter((link) => link.fromNode === powerAdapter.id)
+      .map((link) => nodeById(link.toNode))
+      .filter((node) => node && ["furnace", "kiln"].includes(node.kind));
+    return poweredTargets.length >= 3;
+  });
+}
+
+function castingProgress() {
+  const required = ["iron_plate", "iron_rod", "copper_plate", "copper_rod", "copper_wire", "steel_plate", "steel_rod"];
+  return {
+    required,
+    progress: required.reduce((sum, key) => sum + Math.min(50, productionTotal(key)), 0),
+    target: required.length * 50,
+    done: required.every((key) => productionTotal(key) >= 50)
+  };
+}
+
+function deviceProductionProgress() {
+  const required = ["miner_device", "furnace_device", "warehouse_device", "generator_device"];
+  return {
+    required,
+    progress: required.reduce((sum, key) => sum + Math.min(10, productionTotal(key)), 0),
+    target: required.length * 10,
+    done: required.every((key) => productionTotal(key) >= 10)
+  };
+}
+
+function goalStep(done, text) {
+  return { done, text };
+}
+
+function goalDefinitions(totals = collectResourceTotals()) {
+  const cast = castingProgress();
+  const devices = deviceProductionProgress();
+  return [
+    {
+      id: "tutorial_mining",
+      title: "任务 1：建立铁矿采集链",
+      detail: "建立铁矿源、采矿机和仓库，让铁矿进入仓库。",
+      progress: Math.min(30, productionTotal("iron_ore", totals)),
+      target: 30,
+      done: countNodes("source") > 0 && countNodes("miner") > 0 && countNodes("warehouse") > 0 && hasResourceLink("source", "miner", "iron_ore") && hasResourceLink("miner", "warehouse", "iron_ore") && productionTotal("iron_ore", totals) >= 30 && warehouseHasResource("iron_ore", 1),
+      reward: { warehouse: 1, furnace: 1 },
+      steps: [
+        goalStep(state.nodes.some((node) => node.kind === "source" && node.resource === "iron_ore"), "放置铁矿源"),
+        goalStep(countNodes("miner") > 0, "放置采矿机"),
+        goalStep(countNodes("warehouse") > 0, "放置仓库"),
+        goalStep(hasResourceLink("source", "miner", "iron_ore"), "连接铁矿源到采矿机"),
+        goalStep(hasResourceLink("miner", "warehouse", "iron_ore") && warehouseHasResource("iron_ore", 1), "采矿机输出铁矿到仓库")
+      ]
+    },
+    {
+      id: "tutorial_iron_ingot",
+      title: "任务 2：熔炼铁锭",
+      detail: "建立熔炉，把铁矿和煤矿送入熔炉，生产铁锭并存入仓库。",
+      progress: Math.min(20, productionTotal("iron_ingot", totals)),
+      target: 20,
+      done: countNodes("furnace") > 0 && productionTotal("iron_ingot", totals) >= 20 && warehouseHasResource("iron_ingot", 1),
+      reward: { miner: 1, furnace: 1, cableStock: 4 },
+      steps: [
+        goalStep(countNodes("furnace") > 0, "放置熔炉并选择铁锭配方"),
+        goalStep(productionTotal("coal", totals) > 0, "建立煤矿采集线，熔炉需要煤"),
+        goalStep(productionTotal("iron_ingot", totals) >= 1, "熔炉产出第一块铁锭"),
+        goalStep(warehouseHasResource("iron_ingot", 1), "把铁锭送入仓库")
+      ]
+    },
+    {
+      id: "tutorial_steel_ingot",
+      title: "任务 3：高温熔炼钢锭",
+      detail: "用高温熔炉接收铁锭和煤矿，生产钢锭并输出到仓库。",
+      progress: Math.min(15, productionTotal("steel_ingot", totals)),
+      target: 15,
+      done: countNodes("kiln") > 0 && productionTotal("steel_ingot", totals) >= 15 && warehouseHasResource("steel_ingot", 1),
+      reward: { kiln: 1, warehouse: 1 },
+      steps: [
+        goalStep(countNodes("kiln") > 0, "放置高温熔炉"),
+        goalStep(productionTotal("iron_ingot", totals) >= 20, "保证铁锭持续供给"),
+        goalStep(productionTotal("steel_ingot", totals) >= 1, "产出第一块钢锭"),
+        goalStep(warehouseHasResource("steel_ingot", 1), "把钢锭送入仓库")
+      ]
+    },
+    {
+      id: "tutorial_group",
+      title: "任务 4：封装钢锭产线",
+      detail: "用封装输入和封装输出声明端口，把钢锭产线封装成一个可复用节点。",
+      progress: workingGroupSteelLine() ? 10 : Math.min(10, Math.max(0, productionTotal("steel_ingot", totals) - 15)),
+      target: 10,
+      done: workingGroupSteelLine(),
+      reward: { adapter_input: 1, adapter_output: 1, adapter_power: 1 },
+      steps: [
+        goalStep(countNodes("adapter_input") > 0, "组内放置封装输入"),
+        goalStep(countNodes("adapter_output") > 0, "组内放置封装输出"),
+        goalStep(countNodes("group") > 0, "多选产线并创建封装分组"),
+        goalStep(groupHasDeclaredPorts(), "组外端口显示对应资源"),
+        goalStep(productionTotal("steel_ingot", totals) >= 25 && warehouseHasResource("steel_ingot", 1), "封装后继续生产 10 个钢锭")
+      ]
+    },
+    {
+      id: "tutorial_power",
+      title: "任务 5：给封装组供电",
+      detail: "组内建立封装电力节点，组外建立煤电链路，把电力送入分组。",
+      progress: groupPowerConnected() && state.power.generation > 0 && state.power.demand > 0 && !state.power.overload ? 1 : 0,
+      target: 1,
+      done: groupPowerConnected() && countNodes("generator") > 0 && state.power.generation > 0 && state.power.demand > 0 && !state.power.overload,
+      reward: { generator: 1, pole: 2, cableStock: 8 },
+      steps: [
+        goalStep(groupHasAdapter("adapter_power"), "组内放置封装电力节点"),
+        goalStep(groupPowerConnected(), "封装电力输出连接 2 个熔炉和 1 个高温熔炉"),
+        goalStep(countNodes("generator") > 0 && productionTotal("coal", totals) > 0, "组外建立煤矿到发电机链路"),
+        goalStep(state.power.generation > 0 && state.power.demand > 0 && !state.power.overload, "发电机连接分组电力输入并保持稳定")
+      ]
+    },
+    {
+      id: "tutorial_casting",
+      title: "任务 6：建立铸造产线",
+      detail: "用铸造厂生产铁板、铁棒、铜板、铜棒、铜线、钢板和钢棒，每种累计 50。",
+      progress: cast.progress,
+      target: cast.target,
+      done: cast.done,
+      reward: { caster: 2, assembler: 1 },
+      steps: cast.required.map((key) => goalStep(productionTotal(key, totals) >= 50, `${resourceName(key)} 50`))
+    },
+    {
+      id: "tutorial_assembly",
+      title: "任务 7：生产基础设备",
+      detail: "建立组装厂，生产采矿机、熔炉、仓库和发电机设备，各 10 个。",
+      progress: devices.progress,
+      target: devices.target,
+      done: countNodes("assembler") > 0 && devices.done,
+      reward: { assembler: 1, cableStock: 10 },
+      steps: [
+        goalStep(countNodes("assembler") > 0, "放置组装厂"),
+        ...devices.required.map((key) => goalStep(productionTotal(key, totals) >= 10, `${resourceName(key)} 10`))
+      ]
+    },
+    {
+      id: "mechanical_core",
+      title: "任务 8：完成一阶段核心目标",
+      detail: "建立稳定的多产线供应，累计生产 50 个机械核心。",
+      progress: Math.min(50, productionTotal("mechanical_core", totals)),
+      target: 50,
+      done: productionTotal("mechanical_core", totals) >= 50 && warehouseHasResource("mechanical_core", 1),
+      reward: {},
+      steps: [
+        goalStep(countNodes("assembler") > 0, "建立组装厂"),
+        goalStep(state.power.generation > 0 && !state.power.overload, "保持稳定供电"),
+        goalStep(productionTotal("mechanical_core", totals) >= 50, "累计生产 50 个机械核心"),
+        goalStep(warehouseHasResource("mechanical_core", 1), "机械核心进入仓库")
+      ]
+    }
+  ];
+}
+
+function currentGoal(totals = collectResourceTotals()) {
+  const goals = goalDefinitions(totals);
+  return goals.find((goal) => !goal.done) || goals[goals.length - 1];
+}
+
+function rewardText(reward) {
+  const parts = [];
+  for (const [key, value] of Object.entries(reward || {})) {
+    if (!value) continue;
+    if (key === "cableStock") parts.push(`线缆 +${value}`);
+    else parts.push(`${nodeTypes[key]?.name || key} +${value}`);
+  }
+  return parts.join(" / ") || "解锁下一阶段";
+}
+
+function showGoalReward(goal, nextGoal) {
+  if (!goalRewardDialog || !goalRewardTitle || !goalRewardBody) return;
+  goalRewardTitle.textContent = goal.title;
+  goalRewardBody.innerHTML = `
+    <p>${goal.detail}</p>
+    <div class="reward-chip-row">
+      ${Object.entries(goal.reward || {}).filter(([, value]) => value).map(([key, value]) => `<span class="reward-chip">${key === "cableStock" ? "线缆" : nodeTypes[key]?.name || key} +${value}</span>`).join("") || `<span class="reward-chip">阶段推进</span>`}
+    </div>
+    ${nextGoal ? `<div class="goal-next-card"><b>下一任务</b><br>${nextGoal.title}<br><span class="muted">${nextGoal.detail}</span></div>` : `<div class="goal-next-card"><b>第一阶段完成</b><br>你已经掌握基础产线、封装、电力、铸造和组装。</div>`}
+  `;
+  if (!goalRewardDialog.open) goalRewardDialog.showModal();
+}
+
+function applyGoalRewards() {
+  const totals = collectResourceTotals();
+  const goals = goalDefinitions(totals);
+  for (let index = 0; index < goals.length; index += 1) {
+    const goal = goals[index];
+    if (!goal.done || state.claimedGoalRewards[goal.id]) continue;
+    for (const [key, value] of Object.entries(goal.reward || {})) {
+      if (key === "cableStock") state.cableStock += value;
+      else if (state.inventory[key] !== undefined) state.inventory[key] += value;
+    }
+    state.claimedGoalRewards[goal.id] = true;
+    if (goal.id === "mechanical_core") state.completed = true;
+    setStatus(`任务完成：${goal.title}，奖励 ${rewardText(goal.reward)}`, "ok");
+    showGoalReward(goal, goals[index + 1] || null);
+    break;
+  }
+}
+
+function goalHints(totals = collectResourceTotals()) {
+  const goal = currentGoal(totals);
+  const steps = goal.steps || [];
+  const nextStep = steps.find((step) => !step.done);
+  const hints = [];
+  if (nextStep) hints.push(`下一步：${nextStep.text}`);
+  if (goal.id === "tutorial_iron_ingot") hints.push("熔炉需要铁矿和煤矿两种输入，缺煤时先单独做一条煤线。");
+  if (goal.id === "tutorial_group") hints.push("封装输入控制组外输入端口，封装输出控制组外输出端口。");
+  if (goal.id === "tutorial_power") hints.push("电杆可以把发电机输出分成 3 路，线缆负载会汇总下游消耗。");
+  if (goal.id === "tutorial_casting" || goal.id === "mechanical_core") hints.push("单条产线产能会逐渐不够，复制多条矿线和熔炼线能保持连续生产。");
+  if (state.power.overload) hints.push("电网已超载，增加发电机或减少接入设备。");
+  return hints.slice(0, 3);
+}
+
+function renderGoals() {
+  const totals = collectResourceTotals();
+  const goals = goalDefinitions(totals);
+  const goal = currentGoal(totals);
+  const index = goals.findIndex((item) => item.id === goal.id);
+  const progress = goal.target ? Math.min(100, Math.floor((goal.progress / goal.target) * 100)) : 100;
+  if (missionStrip) {
+    const nextStep = (goal.steps || []).find((step) => !step.done);
+    missionStrip.innerHTML = `
+      <div>
+        <b>${goal.title}</b>
+        <span>${nextStep ? nextStep.text : goal.detail}</span>
+      </div>
+      <strong>${Math.floor(goal.progress)} / ${goal.target}</strong>
+    `;
+  }
+  goalPanel.innerHTML = `
+    <div class="goal-stage">主线 ${index + 1} / ${goals.length}</div>
+    <div class="goal-title">${goal.title}</div>
+    <div class="goal-detail">${goal.detail}</div>
+    <div class="goal-progress"><span style="width:${progress}%"></span></div>
+    <div class="info-row"><span>进度</span><b>${Math.floor(goal.progress)} / ${goal.target}</b></div>
+    <div class="info-row"><span>完成奖励</span><b>${rewardText(goal.reward)}</b></div>
+    <div class="goal-checklist">
+      ${(goal.steps || []).map((step) => `<div class="${step.done ? "done" : ""}"><i></i><span>${step.text}</span></div>`).join("")}
+    </div>
     <div class="goal-hints">
       ${goalHints(totals).map((hint) => `<div>${hint}</div>`).join("")}
     </div>
@@ -2332,6 +3027,72 @@ function renderLogisticsOverview() {
       <div class="logistics-line-grid">
         <div>
           <span>线路健康</span>
+          <b>${state.links.length} 条</b>
+        </div>
+        <div class="logistics-line-cells">${lineCells}</div>
+      </div>
+      <div class="logistics-footer">
+        <span>峰值 ${peak.toFixed(1)}/秒</span>
+        <b>${busiestText}</b>
+      </div>
+    </div>
+  `;
+}
+
+function renderLogisticsOverview() {
+  const busiest = state.links
+    .map((link) => ({ link, cargo: link.packets.reduce((sum, packet) => sum + packet.amount, 0) }))
+    .sort((a, b) => b.cargo - a.cargo)[0];
+  const busiestFrom = busiest ? nodeById(busiest.link.fromNode) : null;
+  const busiestTo = busiest ? nodeById(busiest.link.toNode) : null;
+  const busiestText = busiest && busiest.cargo > 0 && busiestFrom && busiestTo
+    ? `${nodeTitle(busiestFrom)} -> ${nodeTitle(busiestTo)}`
+    : "无";
+  const average = logisticsAverageThroughput();
+  const peak = Math.max(state.logisticsPeak || 0, average);
+  const packetCount = state.links.reduce((count, link) => count + link.packets.length, 0);
+  const maxPackets = Math.max(1, state.links.length * LOGISTICS_PACKET_LIMIT);
+  const warnLines = state.links.filter((link) => link.packets.length >= LOGISTICS_WARN_PACKETS && link.packets.length < LOGISTICS_PACKET_LIMIT).length;
+  const blockedLines = state.links.filter((link) => link.packets.length >= LOGISTICS_PACKET_LIMIT).length;
+  const efficiency = state.links.length
+    ? Math.max(0, Math.min(100, Math.round(100 - blockedLines * 35 - warnLines * 12 - (packetCount / maxPackets) * 18)))
+    : 0;
+  const statusClass = blockedLines || efficiency <= LOGISTICS_DANGER_EFFICIENCY ? "danger" : warnLines || efficiency <= LOGISTICS_WARN_EFFICIENCY ? "warn" : "ok";
+  const statusText = blockedLines || efficiency <= LOGISTICS_DANGER_EFFICIENCY ? "堵塞" : warnLines || efficiency <= LOGISTICS_WARN_EFFICIENCY ? "高负载" : state.links.length ? "顺畅" : "待机";
+  const lineCells = state.links.length
+    ? state.links.map((link) => {
+      const level = link.packets.length >= LOGISTICS_PACKET_LIMIT ? "danger" : link.packets.length >= LOGISTICS_WARN_PACKETS ? "warn" : "ok";
+      const from = nodeById(link.fromNode);
+      const to = nodeById(link.toNode);
+      return `<span class="logistics-line-cell ${level}" title="${from ? nodeTitle(from) : "失效来源"} -> ${to ? nodeTitle(to) : "失效目标"} ${link.packets.length}/${LOGISTICS_PACKET_LIMIT}"></span>`;
+    }).join("")
+    : `<span class="logistics-line-empty">暂无物流线</span>`;
+  const averageWidth = Math.min(100, Math.round((average / Math.max(peak, 1)) * 100));
+  const packetWidth = Math.min(100, Math.round((packetCount / maxPackets) * 100));
+  logisticsOverview.innerHTML = `
+    <div class="logistics-dashboard ${statusClass}">
+      <div class="logistics-core" style="--efficiency:${efficiency}">
+        <div class="logistics-core-ring"></div>
+        <div class="logistics-core-value">
+          <strong>${efficiency}%</strong>
+          <span>线路健康</span>
+        </div>
+      </div>
+      <div class="logistics-bars">
+        <div class="logistics-bar">
+          <span>5秒吞吐</span>
+          <div><i class="avg" style="width:${averageWidth}%"></i></div>
+          <b>${average.toFixed(1)}/秒</b>
+        </div>
+        <div class="logistics-bar">
+          <span>在途包</span>
+          <div><i class="packets" style="width:${packetWidth}%"></i></div>
+          <b>${packetCount}/${maxPackets}</b>
+        </div>
+      </div>
+      <div class="logistics-line-grid">
+        <div>
+          <span>${statusText}</span>
           <b>${state.links.length} 条</b>
         </div>
         <div class="logistics-line-cells">${lineCells}</div>
@@ -2518,6 +3279,7 @@ function isPowerOutputUsed(nodeId, port) {
 }
 
 function startNodeDrag(event) {
+  if (event.target.closest(".node-recipe-switch")) return;
   if (event.target.classList.contains("port") || event.button !== 0) return;
   event.stopPropagation();
   const node = nodeById(event.currentTarget.dataset.id);
@@ -2560,7 +3322,29 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
+nodesLayer.addEventListener("click", (event) => {
+  const recipeSwitch = event.target.closest(".node-recipe-switch");
+  if (!recipeSwitch) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const nodeId = recipeSwitch.dataset.nodeRecipe;
+  const stepButton = event.target.closest("[data-recipe-step]");
+  if (stepButton) {
+    stepNodeRecipe(nodeId, Number(stepButton.dataset.recipeStep));
+    return;
+  }
+  if (event.target.closest("[data-open-node-recipe]")) {
+    setSingleSelection(nodeId);
+    openRecipeDialog(nodeId);
+    render();
+  }
+});
+
 nodesLayer.addEventListener("pointerdown", (event) => {
+  if (event.target.closest(".node-recipe-switch")) {
+    event.stopPropagation();
+    return;
+  }
   const port = event.target.closest(".port");
   if (!port) return;
   const dragType = port.dataset.side === "power-out" ? "power" : "logistics";
@@ -2845,9 +3629,15 @@ function simulate(now) {
   for (const node of state.nodes) {
     updateWarehouseLock(node);
     if (node.kind === "warehouse") {
+      const totalOutputLimit = node.outputLimits.reduce((sum, limit, index) => sum + (node.outputOpen[index] ? Math.max(0, limit || 0) : 0), 0);
       node.warehouseInBuffer = Math.min(12, node.warehouseInBuffer + dt * 4);
-      node.warehouseOutBuffer = Math.min(12, node.warehouseOutBuffer + dt * 4);
-      node.outputLimitBuffers = node.outputLimitBuffers.map((buffer, index) => Math.min(node.outputLimits[index] || 0, buffer + dt * (node.outputLimits[index] || 0)));
+      node.warehouseOutBuffer = Math.min(Math.max(12, totalOutputLimit * 2), node.warehouseOutBuffer + dt * Math.max(4, totalOutputLimit));
+      node.outputLimitBuffers = node.outputLimitBuffers.map((buffer, index) => {
+        const limit = Math.max(0, node.outputLimits[index] || 0);
+        if (limit <= 0) return 0;
+        const burst = Math.max(1, limit * 2);
+        return Math.min(burst, buffer + dt * limit);
+      });
     }
     runMiner(node, dt);
     runIndustry(node, dt);
@@ -2860,7 +3650,10 @@ function simulate(now) {
 
   recordLogisticsThroughput(now, dt);
   applyGoalRewards();
-  render({ skipInspector: true });
+  const shouldRefreshInspector = Boolean(state.selectedId || state.selectedLinkId || state.selectedIds.length)
+    && now - state.lastInspectorRender > 120;
+  if (shouldRefreshInspector) state.lastInspectorRender = now;
+  render({ skipInspector: !shouldRefreshInspector });
   requestAnimationFrame(simulate);
 }
 
@@ -2960,7 +3753,8 @@ function movePackets(link, dt) {
   if (!to) return;
   const length = polylineLength(linkPoints(link));
   for (const packet of link.packets) {
-    packet.distance = (packet.distance || packet.progress * length || 0) + dt * (link.speed || 130);
+    const currentDistance = packet.distance ?? packet.progress * length ?? 0;
+    packet.distance = currentDistance + dt * (link.speed || 130);
     packet.progress = packet.distance / length;
   }
   const remaining = [];
@@ -3012,7 +3806,10 @@ function emitPackets(link, dt) {
   if (resource !== link.resource) return;
   if (!canReceive(to, link.resource, 1, link.toPort, true)) return;
 
-  link.emitBuffer += dt * link.rate;
+  const warehouseLimit = from.kind === "warehouse" ? Math.max(0, from.outputLimits[link.fromPort] || 0) : null;
+  const emitRate = from.kind === "warehouse" ? Math.max(link.rate || 3, warehouseLimit) : (link.rate || 3);
+  link.emitBuffer = Math.min(Math.max(1, emitRate * 2), link.emitBuffer + dt * emitRate);
+  let emittedThisTick = 0;
   while (link.emitBuffer >= 1 && hasAvailableOutput(from, store, link.resource, link.fromPort) && canReceive(to, link.resource, 1, link.toPort, true) && link.packets.length < LOGISTICS_PACKET_LIMIT) {
     if (from.kind === "warehouse" && from.warehouseOutBuffer < 1) break;
     if (from.kind === "warehouse" && (from.outputLimitBuffers[link.fromPort] || 0) < 1) break;
@@ -3022,12 +3819,14 @@ function emitPackets(link, dt) {
       from.outputLimitBuffers[link.fromPort] -= 1;
     }
     consumeOutput(from, store, link.resource, link.fromPort);
+    const queuedDistance = -emittedThisTick * LOGISTICS_PACKET_SPACING;
     link.packets.push({
       resource: link.resource,
       amount: 1,
-      progress: 0,
-      distance: 0
+      progress: queuedDistance / Math.max(1, polylineLength(linkPoints(link))),
+      distance: queuedDistance
     });
+    emittedThisTick += 1;
   }
 }
 
@@ -3155,6 +3954,11 @@ function checkStageCompletion() {
     state.completed = true;
     setStatus("第一阶段完成：机械核心达到 10 个，第二时代已解锁", "ok");
   }
+}
+
+function checkStageCompletion() {
+  const total = state.nodes.reduce((count, node) => count + (node.outputStore.mechanical_core || 0) + (node.inputStore.mechanical_core || 0), 0);
+  if (total >= 50 && !state.completed) state.completed = true;
 }
 
 function createSaveData() {
@@ -3478,6 +4282,7 @@ document.querySelectorAll("[data-device-tab]").forEach((button) => {
 
 document.querySelector("#close-recipe-dialog").addEventListener("click", () => recipeDialog.close());
 document.querySelector("#close-save-dialog").addEventListener("click", () => saveDialog.close());
+closeGoalRewardButton?.addEventListener("click", () => goalRewardDialog.close());
 document.querySelector("#create-save-slot").addEventListener("click", () => saveToSlot());
 
 document.querySelectorAll("[data-mode]").forEach((button) => {

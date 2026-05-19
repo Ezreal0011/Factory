@@ -20,6 +20,33 @@
       </header>
 
       <main class="main">
+        <aside class="monitor-panel">
+          <section class="console-panel">
+            <h2>资源总览</h2>
+            <div id="resource-overview" class="metric-grid"></div>
+          </section>
+
+          <section class="console-panel">
+            <h2>电网监控</h2>
+            <div id="power-overview"></div>
+          </section>
+
+          <section class="console-panel">
+            <h2>物流健康度</h2>
+            <div id="logistics-overview"></div>
+          </section>
+
+          <section class="console-panel">
+            <h2>警报系统</h2>
+            <div class="alert-filters">
+              <button class="active" data-alert-filter="all" type="button">全部</button>
+              <button data-alert-filter="critical" type="button">严重</button>
+              <button data-alert-filter="warn" type="button">警告</button>
+            </div>
+            <div id="alerts"></div>
+          </section>
+        </aside>
+
         <section class="canvas-shell">
           <div class="toolbar">
             <button class="mode" data-mode="logistics" type="button">物流线</button>
@@ -36,6 +63,7 @@
             <button id="delete-selected-link" type="button" disabled>删除选中连线</button>
             <button id="clear-all" type="button">清空节点</button>
           </div>
+          <div id="mission-strip" class="mission-strip"></div>
           <div id="canvas" class="canvas">
             <svg id="links" class="links" aria-hidden="true"></svg>
             <div id="nodes" class="nodes"></div>
@@ -51,31 +79,6 @@
           <section class="console-panel">
             <h2>当前节点</h2>
             <div id="inspector-content" class="muted">当前未选择节点</div>
-          </section>
-
-          <section class="console-panel">
-            <h2>资源总览</h2>
-            <div id="resource-overview" class="metric-grid"></div>
-          </section>
-
-          <section class="console-panel">
-            <h2>电网监控</h2>
-            <div id="power-overview"></div>
-          </section>
-
-          <section class="console-panel">
-            <h2>物流监控</h2>
-            <div id="logistics-overview"></div>
-          </section>
-
-          <section class="console-panel">
-            <h2>警报系统</h2>
-            <div class="alert-filters">
-              <button class="active" data-alert-filter="all" type="button">全部</button>
-              <button data-alert-filter="critical" type="button">严重</button>
-              <button data-alert-filter="warn" type="button">警告</button>
-            </div>
-            <div id="alerts"></div>
           </section>
         </aside>
       </main>
@@ -145,6 +148,17 @@
         <button id="close-recipe-dialog" class="recipe-close-button" type="button">×</button>
       </div>
       <div id="recipe-dialog-content" class="recipe-dialog-content"></div>
+    </dialog>
+
+    <dialog id="goal-reward-dialog" class="goal-reward-dialog">
+      <div class="goal-reward-head">
+        <div>
+          <div class="goal-reward-kicker">MISSION COMPLETE</div>
+          <h2 id="goal-reward-title">任务完成</h2>
+        </div>
+        <button id="close-goal-reward" class="recipe-close-button" type="button">×</button>
+      </div>
+      <div id="goal-reward-body" class="goal-reward-body"></div>
     </dialog>
 
     <script src="./app.js"></script>
