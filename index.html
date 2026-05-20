@@ -141,6 +141,7 @@
             <strong>机械工业时代</strong>
             <small>M8 工业监控 UI</small>
           </div>
+          <button id="open-gm-panel" class="gm-entry-button" type="button" title="GM 管理">GM</button>
         </div>
         <div id="status" class="status">工业控制台持续监控节点、资源、电网、物流和警报</div>
       </header>
@@ -286,6 +287,40 @@
         <button id="close-goal-reward" class="recipe-close-button" type="button">×</button>
       </div>
       <div id="goal-reward-body" class="goal-reward-body"></div>
+    </dialog>
+
+    <dialog id="gm-dialog" class="gm-dialog">
+      <div class="gm-dialog-head">
+        <div>
+          <div class="gm-dialog-kicker">GM CONTROL</div>
+          <h2>库存资源管理</h2>
+          <p>本地开发工具。后续服务器版本需要改为服务端权限校验。</p>
+        </div>
+        <button id="close-gm-dialog" class="recipe-close-button" type="button">×</button>
+      </div>
+      <div class="gm-dialog-body">
+        <div class="gm-warning">当前 GM 密码和加资源逻辑仅用于本地开发，上线服务器前必须迁移到服务端。</div>
+        <div class="gm-controls">
+          <label>
+            <span>分类</span>
+            <select id="gm-category"></select>
+          </label>
+          <label>
+            <span>资源</span>
+            <select id="gm-resource"></select>
+          </label>
+          <label>
+            <span>数量</span>
+            <input id="gm-amount" type="number" min="1" max="999999" step="1" value="100" />
+          </label>
+        </div>
+        <div id="gm-resource-preview" class="gm-resource-preview"></div>
+        <div class="gm-actions">
+          <button id="gm-add-resource" class="primary" type="button">增加库存</button>
+          <button id="gm-basic-supply" type="button">基础补给</button>
+        </div>
+        <div id="gm-log" class="gm-log">等待 GM 指令</div>
+      </div>
     </dialog>
 
     <script src="./config/generated/game_config.js"></script>

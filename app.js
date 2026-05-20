@@ -80,6 +80,62 @@ const recipes = {
   ]
 };
 
+let nodeUpgrades = {
+  miner: [
+    { level: 2, name: "强化钻头", desc: "采矿速度翻倍，缓存明显提升", costs: { iron_plate: 10, gear: 2 }, effects: { miner_rate_multiplier: 2, capacity_multiplier: 2 } },
+    { level: 3, name: "动力采掘", desc: "采矿速度大幅提升到四倍", costs: { steel_plate: 15, power_unit: 2 }, effects: { miner_rate_multiplier: 2, capacity_multiplier: 2 } }
+  ],
+  furnace: [
+    { level: 2, name: "强化炉膛", desc: "生产速度和缓存大幅提升", costs: { iron_plate: 12, iron_rod: 8, coal: 20 }, effects: { speed_multiplier: 1.8, capacity_multiplier: 2, power_demand_multiplier: 1.2 } },
+    { level: 3, name: "多口进料", desc: "生产速度提升到约三倍并开放第 4 输入口", costs: { steel_plate: 15, glass: 8, power_unit: 1 }, effects: { speed_multiplier: 1.78, capacity_multiplier: 2, input_ports: 4, power_demand_multiplier: 1.35 } }
+  ],
+  kiln: [
+    { level: 2, name: "耐热内衬", desc: "高温冶炼速度和缓存大幅提升", costs: { steel_plate: 18, steel_rod: 10, glass: 10 }, effects: { speed_multiplier: 1.8, capacity_multiplier: 2, power_demand_multiplier: 1.2 } },
+    { level: 3, name: "高压炉控", desc: "高温冶炼速度提升到约三倍并开放第 4 输入口", costs: { industrial_frame: 4, power_unit: 2, cable: 6 }, effects: { speed_multiplier: 1.78, capacity_multiplier: 2, input_ports: 4, power_demand_multiplier: 1.35 } }
+  ],
+  caster: [
+    { level: 2, name: "高速模具", desc: "铸造速度和缓存大幅提升", costs: { steel_plate: 14, gear: 4, copper_wire: 12 }, effects: { speed_multiplier: 1.8, capacity_multiplier: 2, power_demand_multiplier: 1.2 } },
+    { level: 3, name: "自动换模", desc: "铸造速度提升到三倍", costs: { industrial_frame: 3, power_unit: 2, cable: 6 }, effects: { speed_multiplier: 1.67, capacity_multiplier: 2, power_demand_multiplier: 1.35 } }
+  ],
+  assembler: [
+    { level: 2, name: "机械臂阵列", desc: "组装速度和缓存明显提升", costs: { industrial_frame: 3, gear: 6, copper_wire: 16 }, effects: { speed_multiplier: 1.6, capacity_multiplier: 2, power_demand_multiplier: 1.2 } },
+    { level: 3, name: "同步控制台", desc: "组装速度提升到约三倍", costs: { industrial_frame: 5, power_unit: 3, cable: 10 }, effects: { speed_multiplier: 1.75, capacity_multiplier: 2, power_demand_multiplier: 1.35 } }
+  ],
+  warehouse: [
+    { level: 2, name: "扩建货架", desc: "仓库容量提升到三倍", costs: { iron_plate: 15, iron_rod: 10 }, effects: { capacity_multiplier: 3 } },
+    { level: 3, name: "钢制仓储区", desc: "仓库容量提升到八倍", costs: { steel_plate: 20, industrial_frame: 2 }, effects: { capacity_multiplier: 2.67 } }
+  ],
+  generator: [
+    { level: 2, name: "强化线圈", desc: "发电量和燃料缓存大幅提升", costs: { copper_wire: 20, steel_plate: 15, cable: 5 }, effects: { generation_multiplier: 1.8, capacity_multiplier: 2 } },
+    { level: 3, name: "高效涡轮", desc: "发电量提升到三倍", costs: { power_unit: 3, industrial_frame: 3, cable: 10 }, effects: { generation_multiplier: 1.67, capacity_multiplier: 2 } }
+  ],
+  pole: [
+    { level: 2, name: "加粗导线", desc: "电杆输出口提升到 4 路", costs: { iron_rod: 8, copper_wire: 12 }, effects: { power_outputs: 4 } },
+    { level: 3, name: "分配母线", desc: "电杆输出口提升到 5 路", costs: { steel_rod: 8, cable: 6 }, effects: { power_outputs: 5 } }
+  ],
+  adapter_input: [
+    { level: 2, name: "接口加固", desc: "封装接口缓存翻倍", costs: { industrial_frame: 1, copper_wire: 8 }, effects: { capacity_multiplier: 2 } },
+    { level: 3, name: "高速接口", desc: "封装接口缓存提升到四倍", costs: { industrial_frame: 2, cable: 6 }, effects: { capacity_multiplier: 2 } }
+  ],
+  adapter_output: [
+    { level: 2, name: "接口加固", desc: "封装接口缓存翻倍", costs: { industrial_frame: 1, copper_wire: 8 }, effects: { capacity_multiplier: 2 } },
+    { level: 3, name: "高速接口", desc: "封装接口缓存提升到四倍", costs: { industrial_frame: 2, cable: 6 }, effects: { capacity_multiplier: 2 } }
+  ],
+  adapter_power: [
+    { level: 2, name: "电力接口加固", desc: "封装电力输出口提升到 4 路", costs: { industrial_frame: 1, copper_wire: 8, cable: 2 }, effects: { power_outputs: 4 } },
+    { level: 3, name: "电力接口母线", desc: "封装电力输出口提升到 5 路", costs: { industrial_frame: 2, power_unit: 1, cable: 6 }, effects: { power_outputs: 5 } }
+  ]
+};
+
+const LOGISTICS_LINE_LEVELS = {
+  1: { name: "基础物流线", color: "#3ee37b", rate: 5, speed: 130, packetLimit: 12, costs: {} },
+  2: { name: "强化物流线", color: "#4aa8ff", rate: 8, speed: 170, packetLimit: 18, costs: { iron_rod: 10, copper_wire: 12 } },
+  3: { name: "高速物流线", color: "#b46cff", rate: 12, speed: 220, packetLimit: 26, costs: { steel_rod: 12, cable: 8, gear: 4 } },
+  4: { name: "重载物流线", color: "#ff4f64", rate: 18, speed: 280, packetLimit: 36, costs: { steel_plate: 20, power_unit: 2, cable: 12 } }
+};
+
+const DEFAULT_OUTPUT_PORT_RATE = 5;
+
 let RECIPE_INPUT_BUFFER_BATCHES = 18;
 let SOURCE_RESERVE_MAX = 50000;
 let MINER_OUTPUT_PER_SECOND = 1 / 1.2;
@@ -169,6 +225,12 @@ const goalRewardDialog = document.querySelector("#goal-reward-dialog");
 const goalRewardTitle = document.querySelector("#goal-reward-title");
 const goalRewardBody = document.querySelector("#goal-reward-body");
 const closeGoalRewardButton = document.querySelector("#close-goal-reward");
+const gmDialog = document.querySelector("#gm-dialog");
+const gmCategorySelect = document.querySelector("#gm-category");
+const gmResourceSelect = document.querySelector("#gm-resource");
+const gmAmountInput = document.querySelector("#gm-amount");
+const gmLog = document.querySelector("#gm-log");
+const gmResourcePreview = document.querySelector("#gm-resource-preview");
 const appShell = document.querySelector(".app");
 const loginScreen = document.querySelector("#login-screen");
 const mainMenuScreen = document.querySelector("#main-menu-screen");
@@ -206,7 +268,7 @@ function showScreen(screenName) {
 }
 
 function closeOpenDialogs() {
-  [saveDialog, recipeDialog, goalRewardDialog, warehouseDialog].forEach((dialog) => {
+  [saveDialog, recipeDialog, goalRewardDialog, warehouseDialog, gmDialog].forEach((dialog) => {
     if (dialog?.open) dialog.close();
   });
 }
@@ -550,6 +612,9 @@ function applyGeneratedGameConfig(config) {
   replaceConfigObject(resources, config.resources);
   replaceConfigObject(nodeTypes, config.nodeTypes);
   replaceConfigObject(recipes, config.recipes);
+  if (config.upgrades) {
+    nodeUpgrades = cloneConfigValue(config.upgrades);
+  }
   const balance = config.balance || {};
   if (balance.RECIPE_INPUT_BUFFER_BATCHES !== undefined) RECIPE_INPUT_BUFFER_BATCHES = Number(balance.RECIPE_INPUT_BUFFER_BATCHES);
   if (balance.SOURCE_RESERVE_MAX !== undefined) SOURCE_RESERVE_MAX = Number(balance.SOURCE_RESERVE_MAX);
@@ -807,6 +872,315 @@ function nodeDefaultCapacity(kind) {
   return nodeTypes[kind]?.capacity || (kind === "warehouse" ? WAREHOUSE_CAPACITY : DEVICE_CAPACITY);
 }
 
+function nodeLevel(node) {
+  return Math.max(1, Number(node?.level) || 1);
+}
+
+function upgradesForKind(kind) {
+  return [...(nodeUpgrades[kind] || [])].sort((a, b) => a.level - b.level);
+}
+
+function appliedUpgrades(node) {
+  const level = nodeLevel(node);
+  return upgradesForKind(node.kind).filter((upgrade) => upgrade.level <= level);
+}
+
+function nextUpgrade(node) {
+  const level = nodeLevel(node);
+  return upgradesForKind(node.kind).find((upgrade) => upgrade.level === level + 1) || null;
+}
+
+function upgradeMultiplier(node, effectName) {
+  return appliedUpgrades(node).reduce((value, upgrade) => value * Number(upgrade.effects?.[effectName] || 1), 1);
+}
+
+function upgradeAbsolute(node, effectName, fallback) {
+  return appliedUpgrades(node).reduce((value, upgrade) => {
+    const effect = upgrade.effects?.[effectName];
+    return effect === undefined || effect === "" ? value : Math.max(value, Number(effect));
+  }, fallback);
+}
+
+function nodeEffectiveCapacity(node) {
+  return Math.max(1, Math.round(nodeDefaultCapacity(node.kind) * upgradeMultiplier(node, "capacity_multiplier")));
+}
+
+function refreshNodeCapacity(node) {
+  node.capacity = Math.max(
+    nodeEffectiveCapacity(node),
+    Math.ceil(storeTotal(node.inputStore || {})),
+    Math.ceil(storeTotal(outputStoreFor(node) || {}))
+  );
+}
+
+function nodeProductionSpeedMultiplier(node) {
+  return upgradeMultiplier(node, "speed_multiplier");
+}
+
+function nodeMinerRate(node) {
+  return MINER_OUTPUT_PER_SECOND * upgradeMultiplier(node, "miner_rate_multiplier");
+}
+
+function nodePowerDemand(node) {
+  return Math.ceil((nodeTypes[node.kind]?.demand || 0) * upgradeMultiplier(node, "power_demand_multiplier"));
+}
+
+function nodeGeneration(node) {
+  return Math.ceil((nodeTypes[node.kind]?.generation || 0) * upgradeMultiplier(node, "generation_multiplier"));
+}
+
+function ensureNodePortArrays(node) {
+  const inputCount = activeInputs(node);
+  const outputCount = activeOutputs(node);
+  while (node.inputOpen.length < inputCount) node.inputOpen.push(true);
+  while (node.outputOpen.length < outputCount) node.outputOpen.push(true);
+  while (node.outputLimits.length < outputCount) node.outputLimits.push(1);
+  while (node.outputLimitBuffers.length < outputCount) node.outputLimitBuffers.push(0);
+}
+
+function warehouseResourceTotals() {
+  const totals = {};
+  for (const warehouse of state.nodes.filter((node) => node.kind === "warehouse")) {
+    for (const store of [warehouse.inputStore, warehouse.outputStore]) {
+      for (const [resource, amount] of Object.entries(store || {})) {
+        if (amount > 0) totals[resource] = (totals[resource] || 0) + amount;
+      }
+    }
+  }
+  return totals;
+}
+
+function upgradeCostStatus(costs = {}) {
+  const totals = warehouseResourceTotals();
+  return Object.entries(costs).map(([resource, required]) => ({
+    resource,
+    required,
+    available: Math.floor(totals[resource] || 0),
+    enough: (totals[resource] || 0) >= required
+  }));
+}
+
+function nodeCanUpgrade(node) {
+  const upgrade = nextUpgrade(node);
+  return Boolean(upgrade && upgradeCostStatus(upgrade.costs).every((item) => item.enough));
+}
+
+function upgradeDeductionPlan(costs = {}) {
+  const lines = [];
+  const missing = [];
+  for (const [resource, required] of Object.entries(costs)) {
+    let remaining = required;
+    for (const warehouse of state.nodes.filter((node) => node.kind === "warehouse")) {
+      for (const storeName of ["inputStore", "outputStore"]) {
+        const available = warehouse[storeName]?.[resource] || 0;
+        if (available <= 0 || remaining <= 0) continue;
+        const amount = Math.min(available, remaining);
+        lines.push({ nodeId: warehouse.id, storeName, resource, amount });
+        remaining -= amount;
+      }
+      if (remaining <= 0) break;
+    }
+    if (remaining > 0.001) missing.push({ resource, amount: remaining });
+  }
+  return { ok: !missing.length, lines, missing };
+}
+
+function applyUpgradeCostPlan(plan) {
+  for (const line of plan.lines) {
+    const warehouse = nodeById(line.nodeId);
+    if (!warehouse) continue;
+    addStore(warehouse[line.storeName], line.resource, -line.amount);
+    updateWarehouseLock(warehouse);
+  }
+}
+
+function formatUpgradeEffect(effect, value) {
+  const percent = Math.round((Number(value) - 1) * 100);
+  const labels = {
+    speed_multiplier: `生产速度 +${percent}%`,
+    miner_rate_multiplier: `采矿速度 +${percent}%`,
+    capacity_multiplier: `缓存容量 +${percent}%`,
+    power_demand_multiplier: `电力消耗 +${percent}%`,
+    generation_multiplier: `发电量 +${percent}%`,
+    input_ports: `输入口提升到 ${value}`,
+    output_ports: `输出口提升到 ${value}`,
+    power_outputs: `电力输出提升到 ${value}`
+  };
+  return labels[effect] || `${effect}: ${value}`;
+}
+
+function upgradePanelHtml(node) {
+  const upgrades = upgradesForKind(node.kind);
+  if (!upgrades.length) return "";
+  const upgrade = nextUpgrade(node);
+  if (!upgrade) {
+    return `
+      <div class="inspector-section upgrade-panel maxed">
+        <div class="inspector-section-title"><span>升级</span><small>Lv.${nodeLevel(node)}</small></div>
+        <div class="upgrade-maxed">已满级</div>
+      </div>
+    `;
+  }
+  const costs = upgradeCostStatus(upgrade.costs);
+  const canUpgrade = costs.every((item) => item.enough);
+  const effects = Object.entries(upgrade.effects || {}).map(([key, value]) => `<li>${formatUpgradeEffect(key, value)}</li>`).join("");
+  return `
+    <div class="inspector-section upgrade-panel ${canUpgrade ? "ready" : "blocked"}">
+      <div class="inspector-section-title"><span>升级</span><small>Lv.${nodeLevel(node)} -> Lv.${upgrade.level}</small></div>
+      <div class="upgrade-title">
+        <b>${upgrade.name}</b>
+        <span>${upgrade.desc || ""}</span>
+      </div>
+      <div class="upgrade-cost-list">
+        ${costs.map((item) => `
+          <div class="upgrade-cost ${item.enough ? "enough" : "missing"}">
+            <span><i style="background:${resourceColor(item.resource)}"></i>${resourceName(item.resource)}</span>
+            <b>${item.available}/${item.required}</b>
+          </div>
+        `).join("")}
+      </div>
+      <ul class="upgrade-effects">${effects}</ul>
+      <small class="upgrade-source">材料来源：全局仓库库存</small>
+      <button id="upgrade-node" class="inspector-action primary" type="button" ${canUpgrade ? "" : "disabled"}>${canUpgrade ? "升级" : "材料不足"}</button>
+    </div>
+  `;
+}
+
+function upgradeNode(node) {
+  const upgrade = nextUpgrade(node);
+  if (!upgrade) return;
+  const plan = upgradeDeductionPlan(upgrade.costs);
+  if (!plan.ok) {
+    setStatus("升级材料不足", "error");
+    render();
+    return;
+  }
+  const costLines = plan.lines.map((line) => `${nodeTitle(nodeById(line.nodeId))}：${resourceName(line.resource)} ${Math.ceil(line.amount)}`).join("\n");
+  const effectLines = Object.entries(upgrade.effects || {}).map(([key, value]) => formatUpgradeEffect(key, value)).join("\n");
+  const confirmed = window.confirm(`确认升级 ${nodeTitle(node)} 到 Lv.${upgrade.level}？\n\n将扣除：\n${costLines}\n\n获得：\n${effectLines}`);
+  if (!confirmed) return;
+  applyUpgradeCostPlan(plan);
+  node.level = upgrade.level;
+  refreshNodeCapacity(node);
+  ensureNodePortArrays(node);
+  setStatus(`${nodeTitle(node)} 已升级到 Lv.${node.level}：${upgrade.name}`, "ok");
+  render();
+}
+
+function logisticsLineLevel(link) {
+  return clamp(Math.floor(Number(link?.level) || 1), 1, Math.max(...Object.keys(LOGISTICS_LINE_LEVELS).map(Number)));
+}
+
+function logisticsLineConfig(linkOrLevel) {
+  const level = typeof linkOrLevel === "number" ? linkOrLevel : logisticsLineLevel(linkOrLevel);
+  return LOGISTICS_LINE_LEVELS[level] || LOGISTICS_LINE_LEVELS[1];
+}
+
+function applyLogisticsLineStats(link) {
+  if (!link) return link;
+  link.level = logisticsLineLevel(link);
+  const config = logisticsLineConfig(link);
+  link.rate = config.rate;
+  link.speed = config.speed;
+  link.packetLimit = config.packetLimit;
+  return link;
+}
+
+function logisticsPacketLimit(link) {
+  return applyLogisticsLineStats(link).packetLimit || LOGISTICS_PACKET_LIMIT;
+}
+
+function logisticsWarnPacketLimit(link) {
+  return Math.max(1, Math.ceil(logisticsPacketLimit(link) * 0.7));
+}
+
+function logisticsLinkColor(link) {
+  return logisticsLineConfig(link).color;
+}
+
+function outputPortRate(node, port = 0) {
+  if (!node) return 0;
+  if (node.kind === "warehouse") return Math.max(0, node.outputLimits?.[port] || 0);
+  if (node.kind === "group") {
+    const map = groupOutputMap(node, port);
+    const adapter = map ? nodeById(map.adapterNodeId) : null;
+    return outputPortRate(adapter, map?.adapterPort || 0);
+  }
+  return DEFAULT_OUTPUT_PORT_RATE;
+}
+
+function logisticsEmitRate(link) {
+  const from = nodeById(link.fromNode);
+  return Math.min(outputPortRate(from, link.fromPort), applyLogisticsLineStats(link).rate || LOGISTICS_LINE_LEVELS[1].rate);
+}
+
+function nextLogisticsUpgrade(link) {
+  const nextLevel = logisticsLineLevel(link) + 1;
+  return LOGISTICS_LINE_LEVELS[nextLevel] ? { level: nextLevel, ...LOGISTICS_LINE_LEVELS[nextLevel] } : null;
+}
+
+function logisticsLineUpgradePanelHtml(link) {
+  const current = logisticsLineConfig(link);
+  const next = nextLogisticsUpgrade(link);
+  if (!next) {
+    return `
+      <div class="inspector-section upgrade-panel maxed">
+        <div class="inspector-section-title"><span>物流线升级</span><small>Lv.${logisticsLineLevel(link)}</small></div>
+        <div class="upgrade-maxed">已满级</div>
+      </div>
+    `;
+  }
+  const costs = upgradeCostStatus(next.costs);
+  const canUpgrade = costs.every((item) => item.enough);
+  return `
+    <div class="inspector-section upgrade-panel ${canUpgrade ? "ready" : "blocked"}">
+      <div class="inspector-section-title"><span>物流线升级</span><small>Lv.${logisticsLineLevel(link)} -> Lv.${next.level}</small></div>
+      <div class="upgrade-title">
+        <b>${next.name}</b>
+        <span>提升发包上限、光球速度和线路在途容量</span>
+      </div>
+      <div class="upgrade-cost-list">
+        ${costs.map((item) => `
+          <div class="upgrade-cost ${item.enough ? "enough" : "missing"}">
+            <span><i style="background:${resourceColor(item.resource)}"></i>${resourceName(item.resource)}</span>
+            <b>${item.available}/${item.required}</b>
+          </div>
+        `).join("")}
+      </div>
+      <ul class="upgrade-effects">
+        <li>发包上限 ${current.rate}/秒 -> ${next.rate}/秒</li>
+        <li>移动速度 ${current.speed}px/s -> ${next.speed}px/s</li>
+        <li>在途容量 ${current.packetLimit} -> ${next.packetLimit}</li>
+      </ul>
+      <small class="upgrade-source">材料来源：全局仓库库存</small>
+      <button id="upgrade-logistics-link" class="inspector-action primary" type="button" ${canUpgrade ? "" : "disabled"}>${canUpgrade ? "升级物流线" : "材料不足"}</button>
+    </div>
+  `;
+}
+
+function upgradeLogisticsLink(link) {
+  const next = nextLogisticsUpgrade(link);
+  if (!next) return;
+  const plan = upgradeDeductionPlan(next.costs);
+  if (!plan.ok) {
+    setStatus("物流线升级材料不足", "error");
+    render();
+    return;
+  }
+  const from = nodeById(link.fromNode);
+  const to = nodeById(link.toNode);
+  const costLines = plan.lines.map((line) => `${nodeTitle(nodeById(line.nodeId))}：${resourceName(line.resource)} ${Math.ceil(line.amount)}`).join("\n");
+  const confirmed = window.confirm(`确认升级物流线到 Lv.${next.level}？\n\n线路：${from ? nodeTitle(from) : "来源"} -> ${to ? nodeTitle(to) : "目标"}\n\n将扣除：\n${costLines}\n\n获得：\n发包上限 ${next.rate}/秒\n移动速度 ${next.speed}px/s\n在途容量 ${next.packetLimit}`);
+  if (!confirmed) return;
+  applyUpgradeCostPlan(plan);
+  link.level = next.level;
+  link.rate = next.rate;
+  link.speed = next.speed;
+  link.packetLimit = next.packetLimit;
+  setStatus(`物流线已升级到 Lv.${link.level}：${next.name}`, "ok");
+  render();
+}
+
 function addNode(kind, resource = null) {
   if (kind !== "source" && state.inventory[kind] !== undefined && (state.inventory[kind] || 0) <= 0) {
     setStatus(`${nodeTypes[kind].name} 库存不足`, "error");
@@ -832,6 +1206,7 @@ function addNode(kind, resource = null) {
     outputLimits: [1, 1, 1, 1],
     outputLimitBuffers: [0, 0, 0, 0],
     recipeIndex: 0,
+    level: 1,
     progress: 0,
     status: "待机",
     powered: false,
@@ -842,6 +1217,8 @@ function addNode(kind, resource = null) {
     adapterPortStores: createAdapterPortStores(kind),
     capacity: nodeDefaultCapacity(kind)
   };
+  refreshNodeCapacity(node);
+  ensureNodePortArrays(node);
   state.nodes.push(node);
   if (kind !== "source" && state.inventory[kind] !== undefined) state.inventory[kind] -= 1;
   setSingleSelection(node.id);
@@ -869,6 +1246,7 @@ function createNodeRaw(kind, resource, x, y) {
     outputLimits: [1, 1, 1, 1],
     outputLimitBuffers: [0, 0, 0, 0],
     recipeIndex: 0,
+    level: 1,
     progress: 0,
     status: "待机",
     powered: false,
@@ -879,6 +1257,8 @@ function createNodeRaw(kind, resource, x, y) {
     adapterPortStores: createAdapterPortStores(kind),
     capacity: nodeDefaultCapacity(kind)
   };
+  refreshNodeCapacity(node);
+  ensureNodePortArrays(node);
   state.nodes.push(node);
   return node;
 }
@@ -1147,16 +1527,16 @@ function groupInterfacePanelHtml(data) {
 
 function activeInputs(node) {
   if (node.kind === "group") return rebuildGroupInterfaces(node).inputs.length ? 3 : 0;
-  return nodeTypes[node.kind].inputs;
+  return upgradeAbsolute(node, "input_ports", nodeTypes[node.kind].inputs);
 }
 
 function activeOutputs(node) {
   if (node.kind === "group") return rebuildGroupInterfaces(node).outputs.length ? 3 : 0;
-  return nodeTypes[node.kind].outputs;
+  return upgradeAbsolute(node, "output_ports", nodeTypes[node.kind].outputs);
 }
 
 function activePowerOutputs(node) {
-  return nodeTypes[node.kind].powerOutputs || (nodeTypes[node.kind].powerOut ? 1 : 0);
+  return upgradeAbsolute(node, "power_outputs", nodeTypes[node.kind].powerOutputs || (nodeTypes[node.kind].powerOut ? 1 : 0));
 }
 
 function nodeVisualWidth(node) {
@@ -1517,13 +1897,15 @@ function renderNodes() {
     const dimClass = focus && !focus.nodeIds.has(node.id) ? "dimmed-node" : "";
     const relationRole = focusRole(node.id, focus);
     const element = document.createElement("article");
-    element.className = `node kind-${node.kind} state-${runState.key} ${powerClass} ${dimClass} ${isNodeSelected(node.id) ? "selected" : ""} ${state.selectedIds.length > 1 && isNodeSelected(node.id) ? "multi-selected" : ""}`;
+    const canUpgrade = nodeCanUpgrade(node);
+    element.className = `node kind-${node.kind} state-${runState.key} ${powerClass} ${dimClass} ${canUpgrade ? "can-upgrade" : ""} ${isNodeSelected(node.id) ? "selected" : ""} ${state.selectedIds.length > 1 && isNodeSelected(node.id) ? "multi-selected" : ""}`;
     element.dataset.id = node.id;
     element.style.left = `${node.x}px`;
     element.style.top = `${node.y}px`;
     element.innerHTML = `
       <div class="node-header">
         <span>${nodeDisplayTitle(node)}</span>
+        <b class="node-level-badge" title="${canUpgrade ? `可升级到 Lv.${nodeLevel(node) + 1}` : `Lv.${nodeLevel(node)}`}">Lv.${nodeLevel(node)}${canUpgrade ? " ↑" : ""}</b>
         <i style="background:${node.kind === "source" ? resourceColor(node.resource) : ""}"></i>
       </div>
       <div class="node-body">
@@ -1541,7 +1923,7 @@ function renderNodes() {
           <div class="node-progress mid-layer"><span style="width:${Math.floor(node.progress * 100)}%"></span></div>
         ` : ""}
         ${nodeTypes[node.kind].powerIn ? `<div class="power-state ${node.powered ? "on" : "off"}">${node.powered ? "已供电" : "未供电"}</div>` : ""}
-        ${node.kind === "generator" ? `<div class="mid-layer">发电 ${node.generating ? `${nodeTypes.generator.generation}` : "0"}</div>` : ""}
+        ${node.kind === "generator" ? `<div class="mid-layer">发电 ${node.generating ? `${nodeGeneration(node)}` : "0"}</div>` : ""}
         ${node.kind === "source" ? `
           <div class="mid-layer">${node.reserve <= 0 ? "消耗殆尽" : "矿源余量"}</div>
           <div class="reserve-progress mid-layer"><span style="width:${Math.floor(sourceReserveRatio(node) * 100)}%; background:${sourceReserveColor(node)}"></span></div>
@@ -1796,7 +2178,7 @@ function renderLinks() {
     const focusDimmed = focus && !focus.logisticsLinkIds.has(link.id);
     const health = logisticsLinkHealth(link);
     appendPath(d, "link-hit", link.id);
-    appendPath(d, `link ${health} ${fadeLogistics || unrelatedSelected || focusDimmed ? "muted-line" : ""} ${focusDimmed ? "focus-dimmed-line" : ""} ${link.id === state.selectedLinkId ? "selected" : ""} ${related ? "related" : ""}`, link.id, link.resource);
+    appendPath(d, `link link-level-${logisticsLineLevel(link)} ${health} ${fadeLogistics || unrelatedSelected || focusDimmed ? "muted-line" : ""} ${focusDimmed ? "focus-dimmed-line" : ""} ${link.id === state.selectedLinkId ? "selected" : ""} ${related ? "related" : ""}`, link.id, link.resource);
     renderPackets(link, points, fadeLogistics || unrelatedSelected || focusDimmed, focusDimmed);
   }
   for (const item of power) {
@@ -1834,8 +2216,8 @@ function isPriorityPowerLink(link, focus) {
 }
 
 function logisticsLinkHealth(link) {
-  if (link.packets.length >= LOGISTICS_PACKET_LIMIT) return "logistics-danger";
-  if (link.packets.length >= LOGISTICS_WARN_PACKETS) return "logistics-warn";
+  if (link.packets.length >= logisticsPacketLimit(link)) return "logistics-danger";
+  if (link.packets.length >= logisticsWarnPacketLimit(link)) return "logistics-warn";
   return "";
 }
 
@@ -1892,7 +2274,11 @@ function appendPath(d, className, linkId = null, resource = null, linkType = "lo
   const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
   path.setAttribute("d", d);
   path.setAttribute("class", className);
-  if (resource && !className.includes("hit")) path.setAttribute("stroke", resourceColor(resource));
+  if (linkType === "logistics" && linkId && !className.includes("hit") && !className.includes("preview")) {
+    path.style.stroke = logisticsLinkColor(state.links.find((item) => item.id === linkId));
+  } else if (resource && !className.includes("hit")) {
+    path.style.stroke = resourceColor(resource);
+  }
   if (linkType === "logistics" && !className.includes("hit") && !className.includes("preview")) {
     path.setAttribute("marker-end", className.includes("muted-line") ? "url(#logistics-arrow-muted)" : "url(#logistics-arrow)");
   }
@@ -1975,7 +2361,7 @@ function renderInspector() {
     <div class="info-row"><span>输入连接</span><b>${inputCount}/${activeInputs(node)}${type.maxInputs ? `（可扩展 ${type.maxInputs}）` : ""}</b></div>
     <div class="info-row"><span>输出连接</span><b>${outputCount}/${activeOutputs(node)}</b></div>
     ${nodeTypes[node.kind].powerIn ? `<div class="info-row"><span>电力状态</span><b>${node.powered ? "已供电" : "未供电"}</b></div>` : ""}
-    ${node.kind === "generator" ? `<div class="info-row"><span>发电状态</span><b>${node.generating ? `${nodeTypes.generator.generation} 电力` : "缺少煤矿"}</b></div>` : ""}
+    ${node.kind === "generator" ? `<div class="info-row"><span>发电状态</span><b>${node.generating ? `${nodeGeneration(node)} 电力` : "缺少煤矿"}</b></div>` : ""}
     ${node.kind === "source" ? `<div class="info-row"><span>矿源总量</span><b>${Math.floor(node.reserve)}</b></div>` : ""}
     ${recipeControlHtml(node)}
     ${warehouseControlHtml(node)}
@@ -2193,22 +2579,30 @@ function productionVisualHtml(node) {
   }
   const recipe = activeRecipe(node);
   if (recipe) {
+    const powerSpeed = node.powered && !recipe.requiresPower ? 1.5 : 1;
+    const speedPercent = Math.round(powerSpeed * nodeProductionSpeedMultiplier(node) * 100);
     return `
       <div class="inspector-section">
         <div class="inspector-section-title"><span>生产进度</span><small>${recipe.name}</small></div>
         <div class="inspector-progress"><i style="width:${Math.round((node.progress || 0) * 100)}%"></i></div>
         <div class="connection-pills">
           <div class="connection-pill"><span>产物</span><b>${resourceName(recipe.output)}</b></div>
-          <div class="connection-pill"><span>效率</span><b>${node.powered && !recipe.requiresPower ? "150%" : "100%"}</b></div>
+          <div class="connection-pill"><span>效率</span><b>${speedPercent}%</b></div>
         </div>
       </div>
     `;
   }
   if (node.kind === "miner") {
+    const rate = nodeMinerRate(node);
+    const speedPercent = Math.round((rate / Math.max(MINER_OUTPUT_PER_SECOND, 0.001)) * 100);
     return `
       <div class="inspector-section">
         <div class="inspector-section-title"><span>采矿进度</span><small>${node.miningResource ? resourceName(node.miningResource) : "等待矿源"}</small></div>
         <div class="inspector-progress"><i style="width:${Math.round((node.progress || 0) * 100)}%"></i></div>
+        <div class="connection-pills">
+          <div class="connection-pill"><span>采矿速度</span><b>${rate.toFixed(2)}/秒</b></div>
+          <div class="connection-pill"><span>效率</span><b>${speedPercent}%</b></div>
+        </div>
       </div>
     `;
   }
@@ -2217,7 +2611,7 @@ function productionVisualHtml(node) {
       <div class="inspector-section">
         <div class="inspector-section-title"><span>发电状态</span><small>${node.generating ? "正在供电" : "等待燃料"}</small></div>
         <div class="connection-pills">
-          <div class="connection-pill"><span>输出</span><b>${nodeTypes.generator.generation}</b></div>
+          <div class="connection-pill"><span>输出</span><b>${nodeGeneration(node)}</b></div>
           <div class="connection-pill"><span>煤矿</span><b>${Math.floor(node.inputStore.coal || 0)}</b></div>
         </div>
       </div>
@@ -2260,6 +2654,7 @@ function bindInspectorControls(node) {
   document.querySelector("#ungroup-node")?.addEventListener("click", () => ungroupNode(node.id));
   document.querySelector("#exit-group")?.addEventListener("click", exitGroup);
   document.querySelector("#open-recipe-dialog")?.addEventListener("click", () => openRecipeDialog(node.id));
+  document.querySelector("#upgrade-node")?.addEventListener("click", () => upgradeNode(node));
   document.querySelectorAll("[data-warehouse-toggle]").forEach((button) => {
     button.addEventListener("click", () => {
       const [side, rawIndex] = button.dataset.warehouseToggle.split(":");
@@ -2331,6 +2726,7 @@ function renderInspector() {
       </div>
       ${inspectorTagsHtml(node, runState)}
       ${productionVisualHtml(node)}
+      ${upgradePanelHtml(node)}
       ${groupPanel}
       ${recipeInputSlotsSection(node)}
       ${inspectorResourceSection("输出缓存", outputStoreFor(node), node.capacity)}
@@ -2769,7 +3165,7 @@ function warehouseControlHtml(node) {
   if (node.kind !== "warehouse") return "";
   const inputButtons = node.inputOpen.map((open, index) => `<button class="${open ? "" : "off"}" data-warehouse-toggle="in:${index}" type="button">入${index + 1}</button>`).join("");
   const outputButtons = node.outputOpen.map((open, index) => `<button class="${open ? "" : "off"}" data-warehouse-toggle="out:${index}" type="button">出${index + 1}</button>`).join("");
-  const limitInputs = node.outputLimits.map((value, index) => `<label>出${index + 1}<input data-output-limit="${index}" min="0" max="4" step="0.5" type="number" value="${value}"></label>`).join("");
+  const limitInputs = node.outputLimits.map((value, index) => `<label>出${index + 1}<input data-output-limit="${index}" min="0" max="18" step="0.5" type="number" value="${value}"></label>`).join("");
   return `
     <div class="info-row"><span>锁定资源</span><b>${resourceName(node.warehouseResource)}</b></div>
     <div class="warehouse-switches">${inputButtons}${outputButtons}</div>
@@ -2787,7 +3183,7 @@ function warehouseControlHtml(node) {
     return `
       <label class="warehouse-limit-row ${node.outputOpen[index] ? "" : "off"}">
         <span>出${index + 1}</span>
-        <input data-output-limit="${index}" min="0" max="4" step="0.5" type="range" value="${value}" ${disabled}>
+        <input data-output-limit="${index}" min="0" max="18" step="0.5" type="range" value="${value}" ${disabled}>
         <b data-output-limit-value="${index}">${stateText}</b>
       </label>
     `;
@@ -2845,18 +3241,27 @@ function renderLinkInspector() {
       : "当前未选择节点";
     return;
   }
+  if (link) applyLogisticsLineStats(link);
+  const lineConfig = link ? logisticsLineConfig(link) : null;
+  const actualEmitRate = link ? logisticsEmitRate(link) : 0;
+  const sourceRate = link ? outputPortRate(from, link.fromPort) : 0;
   inspector.innerHTML = link && from && to
     ? `
       <div class="info-row"><span>类型</span><b>物流连线</b></div>
+      <div class="info-row"><span>等级</span><b><i class="line-grade-swatch" style="background:${lineConfig.color}"></i>Lv.${logisticsLineLevel(link)} ${lineConfig.name}</b></div>
         <div class="info-row"><span>来源</span><b>${nodeTitle(from)} 输出 ${(link.fromPort || 0) + 1}</b></div>
       <div class="info-row"><span>目标</span><b>${nodeTitle(to)} 输入 ${link.toPort + 1}</b></div>
       <div class="info-row"><span>锁定资源</span><b>${resourceName(link.resource)}</b></div>
-      <div class="info-row"><span>在线资源包</span><b>${link.packets.length}</b></div>
-      <div class="info-row"><span>吞吐上限</span><b>${link.rate} / 秒</b></div>
+      <div class="info-row"><span>在途容量</span><b>${link.packets.length}/${logisticsPacketLimit(link)}</b></div>
+      <div class="info-row"><span>输出端能力</span><b>${sourceRate} / 秒</b></div>
+      <div class="info-row"><span>线路发包</span><b>${link.rate} / 秒</b></div>
+      <div class="info-row"><span>实际发包</span><b>${actualEmitRate} / 秒</b></div>
       <div class="info-row"><span>流动速度</span><b>${link.speed} px / 秒</b></div>
       <div class="info-row"><span>已运输</span><b>${Math.floor(link.totalMoved)}</b></div>
+      ${logisticsLineUpgradePanelHtml(link)}
     `
     : "当前未选择节点";
+  document.querySelector("#upgrade-logistics-link")?.addEventListener("click", () => upgradeLogisticsLink(link));
 }
 
 function renderMonitoring() {
@@ -3056,6 +3461,156 @@ function deviceFromResource(resource) {
     adapter_output_device: "adapter_output",
     adapter_power_device: "adapter_power"
   }[resource] || null;
+}
+
+const GM_PASSWORD = "111222";
+
+function gmResourceCategory(key) {
+  if (key === "cableStock") return "special";
+  if (deviceFromResource(key)) return "device";
+  if (["iron_ore", "copper_ore", "coal", "sand"].includes(key)) return "ore";
+  if (key.includes("ingot") || key.includes("plate") || key.includes("rod") || key === "glass") return "metal";
+  return "part";
+}
+
+function gmCategoryLabel(category) {
+  return {
+    all: "全部",
+    ore: "矿物",
+    metal: "金属",
+    part: "中间件",
+    device: "设备",
+    special: "特殊库存"
+  }[category] || category;
+}
+
+function gmResourceOptions() {
+  return [
+    ...Object.keys(resources).map((key) => ({
+      key,
+      name: resourceName(key),
+      color: resourceColor(key),
+      category: gmResourceCategory(key)
+    })),
+    {
+      key: "cableStock",
+      name: "电力线缆库存",
+      color: "#ffe45c",
+      category: "special"
+    }
+  ].sort((a, b) => {
+    const order = { ore: 1, metal: 2, part: 3, device: 4, special: 5 };
+    return (order[a.category] || 9) - (order[b.category] || 9) || a.name.localeCompare(b.name, "zh-Hans-CN");
+  });
+}
+
+function renderGmResourceOptions() {
+  if (!gmCategorySelect || !gmResourceSelect) return;
+  const currentCategory = gmCategorySelect.value || "all";
+  const categories = ["all", "ore", "metal", "part", "device", "special"];
+  gmCategorySelect.innerHTML = categories.map((category) => `<option value="${category}">${gmCategoryLabel(category)}</option>`).join("");
+  gmCategorySelect.value = currentCategory;
+  const currentResource = gmResourceSelect.value;
+  const options = gmResourceOptions().filter((item) => currentCategory === "all" || item.category === currentCategory);
+  gmResourceSelect.innerHTML = options.map((item) => `<option value="${item.key}">${gmCategoryLabel(item.category)} - ${item.name}</option>`).join("");
+  if (options.some((item) => item.key === currentResource)) gmResourceSelect.value = currentResource;
+  renderGmPreview();
+}
+
+function renderGmPreview() {
+  if (!gmResourcePreview || !gmResourceSelect) return;
+  const item = gmResourceOptions().find((option) => option.key === gmResourceSelect.value);
+  if (!item) {
+    gmResourcePreview.innerHTML = `<span class="resource-empty">未选择资源</span>`;
+    return;
+  }
+  const target = item.key === "cableStock"
+    ? "写入电力线缆库存"
+    : deviceFromResource(item.key)
+      ? `写入建筑库存：${nodeTypes[deviceFromResource(item.key)]?.name || item.name}`
+      : "写入仓库缓存";
+  gmResourcePreview.innerHTML = `
+    <span class="resource-badge">
+      <i style="background:${item.color}"></i>
+      <b>${item.name}</b>
+      <em>${gmCategoryLabel(item.category)}</em>
+    </span>
+    <small>${target}</small>
+  `;
+}
+
+function openGmPasswordGate() {
+  const password = window.prompt("请输入 GM 密码");
+  if (password === null) return;
+  if (password !== GM_PASSWORD) {
+    setStatus("GM 密码错误", "error");
+    return;
+  }
+  renderGmResourceOptions();
+  gmDialog?.showModal();
+}
+
+function warehouseCanAcceptGmResource(node, resource) {
+  if (node.kind !== "warehouse") return false;
+  const total = storeTotal(node.inputStore) + storeTotal(node.outputStore);
+  if (!node.warehouseResource && total <= 0.001) return true;
+  return node.warehouseResource === resource;
+}
+
+function gmTargetWarehouse(resource) {
+  const warehouses = state.nodes.filter((node) => node.kind === "warehouse");
+  return warehouses.find((node) => node.warehouseResource === resource)
+    || warehouses.find((node) => warehouseCanAcceptGmResource(node, resource))
+    || createNodeRaw("warehouse", null, state.viewport.x * -1 / state.viewport.scale + 180, state.viewport.y * -1 / state.viewport.scale + 140);
+}
+
+function addGmInventory(resource, amount) {
+  const safeAmount = Math.max(1, Math.floor(Number(amount) || 0));
+  if (resource === "cableStock") {
+    state.cableStock += safeAmount;
+    return { target: "电力线缆库存", amount: safeAmount };
+  }
+  const deviceKind = deviceFromResource(resource);
+  if (deviceKind) {
+    state.inventory[deviceKind] = (state.inventory[deviceKind] || 0) + safeAmount;
+    return { target: `${nodeTypes[deviceKind]?.name || resource}建筑库存`, amount: safeAmount };
+  }
+  const warehouse = gmTargetWarehouse(resource);
+  warehouse.warehouseResource = resource;
+  addStore(warehouse.inputStore, resource, safeAmount);
+  refreshNodeCapacity(warehouse);
+  return { target: nodeTitle(warehouse), amount: safeAmount };
+}
+
+function gmAddSelectedResource() {
+  const resource = gmResourceSelect?.value;
+  if (!resource) return;
+  const amount = Math.max(1, Math.floor(Number(gmAmountInput?.value) || 1));
+  const result = addGmInventory(resource, amount);
+  const text = `已增加 ${resource === "cableStock" ? "电力线缆库存" : resourceName(resource)} x${result.amount} -> ${result.target}`;
+  if (gmLog) gmLog.textContent = text;
+  setStatus(`GM ${text}`, "ok");
+  render();
+}
+
+function gmAddBasicSupply() {
+  const supply = {
+    iron_ore: 300,
+    copper_ore: 300,
+    coal: 300,
+    iron_ingot: 120,
+    copper_ingot: 120,
+    iron_plate: 80,
+    iron_rod: 80,
+    copper_wire: 120,
+    steel_ingot: 60,
+    steel_plate: 40,
+    cableStock: 20
+  };
+  for (const [resource, amount] of Object.entries(supply)) addGmInventory(resource, amount);
+  if (gmLog) gmLog.textContent = "已发放基础补给";
+  setStatus("GM 已发放基础补给", "ok");
+  render();
 }
 
 function warehouseHasResource(resource, amount = 1) {
@@ -3429,9 +3984,9 @@ function renderLogisticsOverview() {
   const average = logisticsAverageThroughput();
   const peak = Math.max(state.logisticsPeak || 0, average);
   const packetCount = state.links.reduce((count, link) => count + link.packets.length, 0);
-  const maxPackets = Math.max(1, state.links.length * LOGISTICS_PACKET_LIMIT);
-  const warnLines = state.links.filter((link) => link.packets.length >= LOGISTICS_WARN_PACKETS && link.packets.length < LOGISTICS_PACKET_LIMIT).length;
-  const blockedLines = state.links.filter((link) => link.packets.length >= LOGISTICS_PACKET_LIMIT).length;
+  const maxPackets = Math.max(1, state.links.reduce((sum, link) => sum + logisticsPacketLimit(link), 0));
+  const warnLines = state.links.filter((link) => link.packets.length >= logisticsWarnPacketLimit(link) && link.packets.length < logisticsPacketLimit(link)).length;
+  const blockedLines = state.links.filter((link) => link.packets.length >= logisticsPacketLimit(link)).length;
   const efficiency = state.links.length
     ? Math.max(0, Math.min(100, Math.round(100 - blockedLines * 35 - warnLines * 12 - (packetCount / maxPackets) * 18)))
     : 0;
@@ -3439,10 +3994,10 @@ function renderLogisticsOverview() {
   const statusText = blockedLines || efficiency <= LOGISTICS_DANGER_EFFICIENCY ? "堵塞" : warnLines || efficiency <= LOGISTICS_WARN_EFFICIENCY ? "高负载" : state.links.length ? "顺畅" : "待机";
   const lineCells = state.links.length
     ? state.links.map((link) => {
-      const level = link.packets.length >= LOGISTICS_PACKET_LIMIT ? "danger" : link.packets.length >= LOGISTICS_WARN_PACKETS ? "warn" : "ok";
+      const level = link.packets.length >= logisticsPacketLimit(link) ? "danger" : link.packets.length >= logisticsWarnPacketLimit(link) ? "warn" : "ok";
       const from = nodeById(link.fromNode);
       const to = nodeById(link.toNode);
-      return `<span class="logistics-line-cell ${level}" title="${from ? nodeTitle(from) : "失效来源"} → ${to ? nodeTitle(to) : "失效目标"} ${link.packets.length}/${LOGISTICS_PACKET_LIMIT}"></span>`;
+      return `<span class="logistics-line-cell ${level}" title="${from ? nodeTitle(from) : "失效来源"} → ${to ? nodeTitle(to) : "失效目标"} ${link.packets.length}/${logisticsPacketLimit(link)}"></span>`;
     }).join("")
     : `<span class="logistics-line-empty">暂无物流线</span>`;
   const averageWidth = Math.min(100, Math.round((average / Math.max(peak, 1)) * 100));
@@ -3495,9 +4050,9 @@ function renderLogisticsOverview() {
   const average = logisticsAverageThroughput();
   const peak = Math.max(state.logisticsPeak || 0, average);
   const packetCount = state.links.reduce((count, link) => count + link.packets.length, 0);
-  const maxPackets = Math.max(1, state.links.length * LOGISTICS_PACKET_LIMIT);
-  const warnLines = state.links.filter((link) => link.packets.length >= LOGISTICS_WARN_PACKETS && link.packets.length < LOGISTICS_PACKET_LIMIT).length;
-  const blockedLines = state.links.filter((link) => link.packets.length >= LOGISTICS_PACKET_LIMIT).length;
+  const maxPackets = Math.max(1, state.links.reduce((sum, link) => sum + logisticsPacketLimit(link), 0));
+  const warnLines = state.links.filter((link) => link.packets.length >= logisticsWarnPacketLimit(link) && link.packets.length < logisticsPacketLimit(link)).length;
+  const blockedLines = state.links.filter((link) => link.packets.length >= logisticsPacketLimit(link)).length;
   const efficiency = state.links.length
     ? Math.max(0, Math.min(100, Math.round(100 - blockedLines * 35 - warnLines * 12 - (packetCount / maxPackets) * 18)))
     : 0;
@@ -3505,10 +4060,10 @@ function renderLogisticsOverview() {
   const statusText = blockedLines || efficiency <= LOGISTICS_DANGER_EFFICIENCY ? "堵塞" : warnLines || efficiency <= LOGISTICS_WARN_EFFICIENCY ? "高负载" : state.links.length ? "顺畅" : "待机";
   const lineCells = state.links.length
     ? state.links.map((link) => {
-      const level = link.packets.length >= LOGISTICS_PACKET_LIMIT ? "danger" : link.packets.length >= LOGISTICS_WARN_PACKETS ? "warn" : "ok";
+      const level = link.packets.length >= logisticsPacketLimit(link) ? "danger" : link.packets.length >= logisticsWarnPacketLimit(link) ? "warn" : "ok";
       const from = nodeById(link.fromNode);
       const to = nodeById(link.toNode);
-      return `<span class="logistics-line-cell ${level}" title="${from ? nodeTitle(from) : "失效来源"} -> ${to ? nodeTitle(to) : "失效目标"} ${link.packets.length}/${LOGISTICS_PACKET_LIMIT}"></span>`;
+      return `<span class="logistics-line-cell ${level}" title="${from ? nodeTitle(from) : "失效来源"} -> ${to ? nodeTitle(to) : "失效目标"} ${link.packets.length}/${logisticsPacketLimit(link)}"></span>`;
     }).join("")
     : `<span class="logistics-line-empty">暂无物流线</span>`;
   const averageWidth = Math.min(100, Math.round((average / Math.max(peak, 1)) * 100));
@@ -3583,7 +4138,7 @@ function collectAlerts() {
     if (node.kind === "generator" && state.powerLinks.some((link) => link.fromNode === node.id) && !node.generating) alerts.push({ level: "warn", text: `${nodeTitle(node)} 缺少煤矿`, nodeId: node.id });
   }
   for (const link of state.links) {
-    if (link.packets.length >= LOGISTICS_PACKET_LIMIT) alerts.push({ level: "warn", text: `${nodeTitle(nodeById(link.fromNode))} 线路堵塞`, nodeId: link.toNode });
+    if (link.packets.length >= logisticsPacketLimit(link)) alerts.push({ level: "warn", text: `${nodeTitle(nodeById(link.fromNode))} 线路堵塞`, nodeId: link.toNode });
   }
   if (state.completed) alerts.push({ level: "ok", text: "第一阶段完成：第二时代已解锁" });
   return alerts.slice(0, 10);
@@ -3919,7 +4474,7 @@ function createLink(toNode, toPort) {
     render();
     return;
   }
-  state.links.push({
+  state.links.push(applyLogisticsLineStats({
     id: `link-${nextId++}`,
     fromNode: drag.fromNode,
     fromPort: drag.fromPort,
@@ -3927,11 +4482,10 @@ function createLink(toNode, toPort) {
     toPort,
     resource: null,
     packets: [],
-    rate: 3,
-    speed: 130,
+    level: 1,
     totalMoved: 0,
     emitBuffer: 0
-  });
+  }));
   pruneAdapterPortBindings();
   state.selectedLinkId = null;
   setStatus("连线成功，M2 物流会自动沿线运输", "ok");
@@ -4113,7 +4667,7 @@ function runPower(dt) {
     if ((node.inputStore.coal || 0) >= dt * 0.4) {
       addStore(node.inputStore, "coal", -dt * 0.4);
       node.generating = true;
-      generation += nodeTypes.generator.generation;
+      generation += nodeGeneration(node);
       activePowerSources.push(node.id);
     }
   }
@@ -4134,7 +4688,7 @@ function runPower(dt) {
   let demand = 0;
   for (const id of poweredIds) {
     const node = nodeById(id);
-    if (node) demand += nodeTypes[node.kind].demand || 0;
+    if (node) demand += nodePowerDemand(node);
   }
   const gridOverload = generation > 0 && demand > generation;
   updatePowerLinkLoads();
@@ -4184,7 +4738,7 @@ function downstreamPowerDemand(nodeId, visited) {
   const node = nodeById(nodeId);
   if (!node) return 0;
   visited.add(nodeId);
-  let total = nodeTypes[node.kind].demand || 0;
+  let total = nodePowerDemand(node);
   if (!nodeTypes[node.kind].powerOut) return total;
   for (const link of state.powerLinks.filter((item) => item.fromNode === nodeId)) {
     total += downstreamPowerDemand(link.toNode, new Set(visited));
@@ -4193,6 +4747,7 @@ function downstreamPowerDemand(nodeId, visited) {
 }
 
 function movePackets(link, dt) {
+  applyLogisticsLineStats(link);
   const to = nodeById(link.toNode);
   if (!to) return;
   const length = polylineLength(linkPoints(link));
@@ -4228,9 +4783,11 @@ function movePackets(link, dt) {
 }
 
 function emitPackets(link, dt) {
+  applyLogisticsLineStats(link);
   const from = nodeById(link.fromNode);
   const to = nodeById(link.toNode);
-  if (!from || !to || link.packets.length >= LOGISTICS_PACKET_LIMIT) return;
+  const packetLimit = logisticsPacketLimit(link);
+  if (!from || !to || link.packets.length >= packetLimit) return;
   if (from.kind === "warehouse" && !from.outputOpen[link.fromPort]) return;
   if (from.kind === "group" && !groupOutputMap(from, link.fromPort)) return;
   const store = outputStoreForLink(from, link.fromPort);
@@ -4250,11 +4807,11 @@ function emitPackets(link, dt) {
   if (resource !== link.resource) return;
   if (!canReceive(to, link.resource, 1, link.toPort, true)) return;
 
-  const warehouseLimit = from.kind === "warehouse" ? Math.max(0, from.outputLimits[link.fromPort] || 0) : null;
-  const emitRate = from.kind === "warehouse" ? Math.max(link.rate || 3, warehouseLimit) : (link.rate || 3);
+  const emitRate = logisticsEmitRate(link);
+  if (emitRate <= 0) return;
   link.emitBuffer = Math.min(Math.max(1, emitRate * 2), link.emitBuffer + dt * emitRate);
   let emittedThisTick = 0;
-  while (link.emitBuffer >= 1 && hasAvailableOutput(from, store, link.resource, link.fromPort) && canReceive(to, link.resource, 1, link.toPort, true) && link.packets.length < LOGISTICS_PACKET_LIMIT) {
+  while (link.emitBuffer >= 1 && hasAvailableOutput(from, store, link.resource, link.fromPort) && canReceive(to, link.resource, 1, link.toPort, true) && link.packets.length < packetLimit) {
     if (from.kind === "warehouse" && from.warehouseOutBuffer < 1) break;
     if (from.kind === "warehouse" && (from.outputLimitBuffers[link.fromPort] || 0) < 1) break;
     link.emitBuffer -= 1;
@@ -4337,7 +4894,7 @@ function runMiner(node, dt) {
     node.progress = 0;
     return;
   }
-  const amount = Math.min(node.inputStore[deposit], dt * MINER_OUTPUT_PER_SECOND, node.capacity - storeTotal(node.outputStore));
+  const amount = Math.min(node.inputStore[deposit], dt * nodeMinerRate(node), node.capacity - storeTotal(node.outputStore));
   if (amount <= 0) {
     node.progress = 0;
     return;
@@ -4346,7 +4903,8 @@ function runMiner(node, dt) {
   addStore(node.outputStore, mineral, amount);
   addProduction(mineral, amount);
   node.miningResource = mineral;
-  node.progress = (node.progress + dt * 1.25) % 1;
+  const visualSpeed = 1.25 * (nodeMinerRate(node) / Math.max(MINER_OUTPUT_PER_SECOND, 0.001));
+  node.progress = (node.progress + dt * visualSpeed) % 1;
 }
 
 function runIndustry(node, dt) {
@@ -4373,7 +4931,7 @@ function runIndustry(node, dt) {
   }
   const speed = node.powered && !recipe.requiresPower ? 1.5 : 1;
   node.status = speed > 1 ? "通电加速生产中" : "生产中";
-  node.progress += (dt * speed) / recipe.time;
+  node.progress += (dt * speed * nodeProductionSpeedMultiplier(node)) / recipe.time;
   if (node.progress < 1) return;
   node.progress = 0;
   takeInputs(node.inputStore, recipe.inputs);
@@ -4511,7 +5069,7 @@ function loadSaveData(data, name = "本地存档") {
     return;
   }
   state.nodes = (data.nodes || []).map(hydrateNode);
-  state.links = data.links || [];
+  state.links = (data.links || []).map((link) => applyLogisticsLineStats({ packets: [], totalMoved: 0, emitBuffer: 0, ...link }));
   state.powerLinks = (data.powerLinks || []).map((link) => ({ capacity: 40, load: 0, overloaded: false, ...link }));
   state.inventory = { ...state.inventory, ...(data.inventory || {}) };
   state.cableStock = data.cableStock ?? state.cableStock;
@@ -4624,6 +5182,7 @@ function hydrateNode(node) {
     outputLimits: [1, 1, 1, 1],
     outputLimitBuffers: [0, 0, 0, 0],
     recipeIndex: 0,
+    level: 1,
     progress: 0,
     status: "待机",
     powered: false,
@@ -4632,10 +5191,11 @@ function hydrateNode(node) {
     groupData: node.kind === "group" ? createEmptyGroupData() : null,
     adapterResources: createAdapterResources(node.kind),
     ...node,
-    capacity: Math.max(node.capacity || 0, nodeDefaultCapacity(node.kind)),
     reserve: sourceReserve.reserve,
     initialReserve: sourceReserve.initialReserve
   };
+  refreshNodeCapacity(hydrated);
+  ensureNodePortArrays(hydrated);
   ensureAdapterPortStores(hydrated);
   return hydrated;
 }
@@ -4684,7 +5244,7 @@ function buildDemoLine() {
 }
 
 function makeLogisticsLink(fromNode, fromPort, toNode, toPort) {
-  return {
+  return applyLogisticsLineStats({
     id: `link-${nextId++}`,
     fromNode,
     fromPort,
@@ -4692,11 +5252,10 @@ function makeLogisticsLink(fromNode, fromPort, toNode, toPort) {
     toPort,
     resource: null,
     packets: [],
-    rate: 3,
-    speed: 130,
+    level: 1,
     totalMoved: 0,
     emitBuffer: 0
-  };
+  });
 }
 
 function updateWarehouseLock(node) {
@@ -4746,6 +5305,12 @@ document.querySelector("#close-recipe-dialog").addEventListener("click", () => r
 document.querySelector("#close-save-dialog").addEventListener("click", () => saveDialog.close());
 closeGoalRewardButton?.addEventListener("click", () => goalRewardDialog.close());
 document.querySelector("#create-save-slot").addEventListener("click", () => saveToSlot());
+document.querySelector("#open-gm-panel")?.addEventListener("click", openGmPasswordGate);
+document.querySelector("#close-gm-dialog")?.addEventListener("click", () => gmDialog?.close());
+gmCategorySelect?.addEventListener("change", renderGmResourceOptions);
+gmResourceSelect?.addEventListener("change", renderGmPreview);
+document.querySelector("#gm-add-resource")?.addEventListener("click", gmAddSelectedResource);
+document.querySelector("#gm-basic-supply")?.addEventListener("click", gmAddBasicSupply);
 
 document.querySelectorAll("[data-mode]").forEach((button) => {
   button.addEventListener("click", () => {
