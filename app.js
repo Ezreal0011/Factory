@@ -128,10 +128,10 @@ let nodeUpgrades = {
 };
 
 const LOGISTICS_LINE_LEVELS = {
-  1: { name: "基础物流线", color: "#3ee37b", rate: 5, speed: 130, packetLimit: 12, costs: {} },
-  2: { name: "强化物流线", color: "#4aa8ff", rate: 8, speed: 170, packetLimit: 18, costs: { iron_rod: 10, copper_wire: 12 } },
-  3: { name: "高速物流线", color: "#b46cff", rate: 12, speed: 220, packetLimit: 26, costs: { steel_rod: 12, cable: 8, gear: 4 } },
-  4: { name: "重载物流线", color: "#ff4f64", rate: 18, speed: 280, packetLimit: 36, costs: { steel_plate: 20, power_unit: 2, cable: 12 } }
+  1: { name: "基础物流线", color: "#3ee37b", rate: 5, speed: 130, packetLimit: 12, width: 2.2, packetRadius: 4.4, costs: {} },
+  2: { name: "强化物流线", color: "#4aa8ff", rate: 8, speed: 170, packetLimit: 18, width: 3.1, packetRadius: 4.9, costs: { iron_rod: 10, copper_wire: 12 } },
+  3: { name: "高速物流线", color: "#b46cff", rate: 12, speed: 220, packetLimit: 26, width: 3.8, packetRadius: 5.3, costs: { steel_rod: 12, cable: 8, gear: 4 } },
+  4: { name: "重载物流线", color: "#ff4f64", rate: 18, speed: 280, packetLimit: 36, width: 4.6, packetRadius: 5.8, costs: { steel_plate: 20, power_unit: 2, cable: 12 } }
 };
 
 const DEFAULT_OUTPUT_PORT_RATE = 5;
@@ -168,6 +168,7 @@ const state = {
   showPower: true,
   lineView: "all",
   alertFilter: "all",
+  goalHighlight: { kind: null, until: 0 },
   lastMonitorRender: 0,
   lastInspectorRender: 0,
   lastGroupClick: { id: null, at: 0 },
@@ -182,6 +183,7 @@ const state = {
   cableStock: 12,
   completed: false,
   claimedGoalRewards: {},
+  completedGoalSteps: {},
   productionStats: {},
   inventory: {
     miner: 5,
@@ -225,6 +227,12 @@ const goalRewardDialog = document.querySelector("#goal-reward-dialog");
 const goalRewardTitle = document.querySelector("#goal-reward-title");
 const goalRewardBody = document.querySelector("#goal-reward-body");
 const closeGoalRewardButton = document.querySelector("#close-goal-reward");
+const upgradeDialog = document.querySelector("#upgrade-dialog");
+const upgradeDialogTitle = document.querySelector("#upgrade-dialog-title");
+const upgradeDialogSubtitle = document.querySelector("#upgrade-dialog-subtitle");
+const upgradeDialogBody = document.querySelector("#upgrade-dialog-body");
+const upgradeDialogConfirm = document.querySelector("#confirm-upgrade-dialog");
+const upgradeDialogCancel = document.querySelector("#cancel-upgrade-dialog");
 const gmDialog = document.querySelector("#gm-dialog");
 const gmCategorySelect = document.querySelector("#gm-category");
 const gmResourceSelect = document.querySelector("#gm-resource");
@@ -268,7 +276,7 @@ function showScreen(screenName) {
 }
 
 function closeOpenDialogs() {
-  [saveDialog, recipeDialog, goalRewardDialog, warehouseDialog, gmDialog].forEach((dialog) => {
+  [saveDialog, recipeDialog, goalRewardDialog, upgradeDialog, warehouseDialog, gmDialog].forEach((dialog) => {
     if (dialog?.open) dialog.close();
   });
 }
@@ -303,6 +311,7 @@ function resetGameState() {
   state.cableStock = 12;
   state.completed = false;
   state.claimedGoalRewards = {};
+  state.completedGoalSteps = {};
   state.productionStats = {};
   state.inventory = defaultInventory();
   nextId = 1;
@@ -699,6 +708,16 @@ function activeRecipe(node) {
   return list ? list[node.recipeIndex] : null;
 }
 
+function recipePowerMode(node, recipe = activeRecipe(node)) {
+  if (!recipe || !nodeTypes[node.kind]?.powerIn) return "none";
+  if (recipe.powerMode) return recipe.powerMode;
+  return recipe.requiresPower ? "required" : "optional";
+}
+
+function recipeRequiresPower(node, recipe = activeRecipe(node)) {
+  return recipePowerMode(node, recipe) === "required";
+}
+
 function hasInputs(store, inputs) {
   return Object.entries(inputs).every(([key, amount]) => (store[key] || 0) >= amount);
 }
@@ -1009,6 +1028,120 @@ function formatUpgradeEffect(effect, value) {
   return labels[effect] || `${effect}: ${value}`;
 }
 
+function projectedUpgradeValue(node, effect, upgrade) {
+  const previousLevel = node.level;
+  const before = {
+    speed_multiplier: `${nodeProductionSpeedMultiplier(node).toFixed(2)}x`,
+    miner_rate_multiplier: `${nodeMinerRate(node).toFixed(2)}/秒`,
+    capacity_multiplier: `${nodeEffectiveCapacity(node)}`,
+    power_demand_multiplier: `${nodePowerDemand(node)}`,
+    generation_multiplier: `${nodeGeneration(node)}`,
+    input_ports: `${activeInputs(node)}`,
+    output_ports: `${activeOutputs(node)}`,
+    power_outputs: `${activePowerOutputs(node)}`
+  }[effect];
+  node.level = upgrade.level;
+  const after = {
+    speed_multiplier: `${nodeProductionSpeedMultiplier(node).toFixed(2)}x`,
+    miner_rate_multiplier: `${nodeMinerRate(node).toFixed(2)}/秒`,
+    capacity_multiplier: `${nodeEffectiveCapacity(node)}`,
+    power_demand_multiplier: `${nodePowerDemand(node)}`,
+    generation_multiplier: `${nodeGeneration(node)}`,
+    input_ports: `${activeInputs(node)}`,
+    output_ports: `${activeOutputs(node)}`,
+    power_outputs: `${activePowerOutputs(node)}`
+  }[effect];
+  node.level = previousLevel;
+  return before && after ? `${before} -> ${after}` : "";
+}
+
+function upgradeCompareHtml(node, upgrade) {
+  const labels = {
+    speed_multiplier: "生产速度",
+    miner_rate_multiplier: "采矿速度",
+    capacity_multiplier: "缓存容量",
+    power_demand_multiplier: "电力消耗",
+    generation_multiplier: "发电量",
+    input_ports: "输入口",
+    output_ports: "输出口",
+    power_outputs: "电力输出"
+  };
+  const rows = Object.keys(upgrade.effects || {})
+    .map((effect) => {
+      const value = projectedUpgradeValue(node, effect, upgrade);
+      return { effect, value };
+    })
+    .filter((item) => item.value)
+    .slice(0, 4);
+  if (!rows.length) return "";
+  return `
+    <div class="upgrade-compare">
+      ${rows.map((row) => `<div><span>${labels[row.effect] || row.effect}</span><b>${row.value}</b></div>`).join("")}
+    </div>
+  `;
+}
+
+function costListHtml(costs = []) {
+  return costs.length
+    ? costs.map((item) => `
+      <div class="upgrade-cost ${item.enough ? "enough" : "missing"}">
+        <span><i style="background:${resourceColor(item.resource)}"></i>${resourceName(item.resource)}</span>
+        <b>${item.available}/${item.required}</b>
+      </div>
+    `).join("")
+    : `<div class="upgrade-empty-cost">无需材料</div>`;
+}
+
+function openUpgradeDialog({ title, subtitle, costs, effects, compare = "", onConfirm }) {
+  if (!upgradeDialog || !upgradeDialogTitle || !upgradeDialogBody || !upgradeDialogConfirm) {
+    onConfirm?.();
+    return;
+  }
+  upgradeDialogTitle.textContent = title;
+  upgradeDialogSubtitle.textContent = subtitle || "";
+  upgradeDialogBody.innerHTML = `
+    <div class="upgrade-dialog-grid">
+      <section>
+        <strong>消耗材料</strong>
+        <div class="upgrade-cost-list">${costListHtml(costs)}</div>
+      </section>
+      <section>
+        <strong>升级效果</strong>
+        <ul class="upgrade-effects">${effects.map((line) => `<li>${line}</li>`).join("")}</ul>
+        ${compare}
+      </section>
+    </div>
+  `;
+  upgradeDialogConfirm.textContent = "确认升级";
+  upgradeDialogConfirm.style.display = "";
+  upgradeDialogConfirm.onclick = () => onConfirm?.();
+  upgradeDialogCancel.textContent = "取消";
+  upgradeDialogCancel.style.display = "";
+  if (!upgradeDialog.open) upgradeDialog.showModal();
+}
+
+function showUpgradeComplete({ title, subtitle, lines = [] }) {
+  if (!upgradeDialog || !upgradeDialogTitle || !upgradeDialogBody) return;
+  upgradeDialogTitle.textContent = title;
+  upgradeDialogSubtitle.textContent = subtitle || "";
+  upgradeDialogBody.innerHTML = `
+    <div class="upgrade-complete-burst">
+      <div class="upgrade-complete-ring"></div>
+      <b>升级完成</b>
+      <span>${subtitle || ""}</span>
+    </div>
+    <div class="upgrade-complete-list">
+      ${lines.map((line) => `<div>${line}</div>`).join("")}
+    </div>
+  `;
+  if (upgradeDialogConfirm) upgradeDialogConfirm.style.display = "none";
+  if (upgradeDialogCancel) {
+    upgradeDialogCancel.textContent = "关闭";
+    upgradeDialogCancel.style.display = "";
+  }
+  if (!upgradeDialog.open) upgradeDialog.showModal();
+}
+
 function upgradePanelHtml(node) {
   const upgrades = upgradesForKind(node.kind);
   if (!upgrades.length) return "";
@@ -1040,6 +1173,7 @@ function upgradePanelHtml(node) {
         `).join("")}
       </div>
       <ul class="upgrade-effects">${effects}</ul>
+      ${upgradeCompareHtml(node, upgrade)}
       <small class="upgrade-source">材料来源：全局仓库库存</small>
       <button id="upgrade-node" class="inspector-action primary" type="button" ${canUpgrade ? "" : "disabled"}>${canUpgrade ? "升级" : "材料不足"}</button>
     </div>
@@ -1055,16 +1189,29 @@ function upgradeNode(node) {
     render();
     return;
   }
-  const costLines = plan.lines.map((line) => `${nodeTitle(nodeById(line.nodeId))}：${resourceName(line.resource)} ${Math.ceil(line.amount)}`).join("\n");
-  const effectLines = Object.entries(upgrade.effects || {}).map(([key, value]) => formatUpgradeEffect(key, value)).join("\n");
-  const confirmed = window.confirm(`确认升级 ${nodeTitle(node)} 到 Lv.${upgrade.level}？\n\n将扣除：\n${costLines}\n\n获得：\n${effectLines}`);
-  if (!confirmed) return;
-  applyUpgradeCostPlan(plan);
-  node.level = upgrade.level;
-  refreshNodeCapacity(node);
-  ensureNodePortArrays(node);
-  setStatus(`${nodeTitle(node)} 已升级到 Lv.${node.level}：${upgrade.name}`, "ok");
-  render();
+  const costs = upgradeCostStatus(upgrade.costs);
+  const effects = Object.entries(upgrade.effects || {}).map(([key, value]) => formatUpgradeEffect(key, value));
+  openUpgradeDialog({
+    title: `升级 ${nodeTitle(node)}`,
+    subtitle: `Lv.${nodeLevel(node)} -> Lv.${upgrade.level} · ${upgrade.name}`,
+    costs,
+    effects,
+    compare: upgradeCompareHtml(node, upgrade),
+    onConfirm: () => {
+      applyUpgradeCostPlan(plan);
+      node.level = upgrade.level;
+      node.upgradeFlashUntil = performance.now() + 1600;
+      refreshNodeCapacity(node);
+      ensureNodePortArrays(node);
+      setStatus(`${nodeTitle(node)} 已升级到 Lv.${node.level}：${upgrade.name}`, "ok");
+      showUpgradeComplete({
+        title: `${nodeTitle(node)} Lv.${node.level}`,
+        subtitle: upgrade.name,
+        lines: effects
+      });
+      render();
+    }
+  });
 }
 
 function logisticsLineLevel(link) {
@@ -1169,16 +1316,42 @@ function upgradeLogisticsLink(link) {
   }
   const from = nodeById(link.fromNode);
   const to = nodeById(link.toNode);
-  const costLines = plan.lines.map((line) => `${nodeTitle(nodeById(line.nodeId))}：${resourceName(line.resource)} ${Math.ceil(line.amount)}`).join("\n");
-  const confirmed = window.confirm(`确认升级物流线到 Lv.${next.level}？\n\n线路：${from ? nodeTitle(from) : "来源"} -> ${to ? nodeTitle(to) : "目标"}\n\n将扣除：\n${costLines}\n\n获得：\n发包上限 ${next.rate}/秒\n移动速度 ${next.speed}px/s\n在途容量 ${next.packetLimit}`);
-  if (!confirmed) return;
-  applyUpgradeCostPlan(plan);
-  link.level = next.level;
-  link.rate = next.rate;
-  link.speed = next.speed;
-  link.packetLimit = next.packetLimit;
-  setStatus(`物流线已升级到 Lv.${link.level}：${next.name}`, "ok");
-  render();
+  const current = logisticsLineConfig(link);
+  const costs = upgradeCostStatus(next.costs);
+  const effects = [
+    `发包上限 ${current.rate}/秒 -> ${next.rate}/秒`,
+    `移动速度 ${current.speed}px/s -> ${next.speed}px/s`,
+    `在途容量 ${current.packetLimit} -> ${next.packetLimit}`
+  ];
+  const compare = `
+    <div class="upgrade-compare">
+      <div><span>线路等级</span><b>Lv.${logisticsLineLevel(link)} -> Lv.${next.level}</b></div>
+      <div><span>线宽表现</span><b>${current.width} -> ${next.width}</b></div>
+      <div><span>光球表现</span><b>${current.packetRadius} -> ${next.packetRadius}</b></div>
+    </div>
+  `;
+  openUpgradeDialog({
+    title: "升级物流线",
+    subtitle: `${from ? nodeTitle(from) : "来源"} -> ${to ? nodeTitle(to) : "目标"} · Lv.${logisticsLineLevel(link)} -> Lv.${next.level}`,
+    costs,
+    effects,
+    compare,
+    onConfirm: () => {
+      applyUpgradeCostPlan(plan);
+      link.level = next.level;
+      link.rate = next.rate;
+      link.speed = next.speed;
+      link.packetLimit = next.packetLimit;
+      link.upgradeFlashUntil = performance.now() + 1600;
+      setStatus(`物流线已升级到 Lv.${link.level}：${next.name}`, "ok");
+      showUpgradeComplete({
+        title: `物流线 Lv.${link.level}`,
+        subtitle: next.name,
+        lines: effects
+      });
+      render();
+    }
+  });
 }
 
 function addNode(kind, resource = null) {
@@ -1337,7 +1510,7 @@ function pauseReason(node) {
   if (activeRecipe(node)) {
     const recipe = activeRecipe(node);
     if (storeTotal(node.outputStore) >= node.capacity) return "输出堵塞";
-    if (recipe.requiresPower && !node.powered) return "缺少电力";
+    if (recipeRequiresPower(node, recipe) && !node.powered) return "等待电力";
     const missing = Object.entries(recipe.inputs)
       .filter(([key, amount]) => (node.inputStore[key] || 0) < amount)
       .map(([key]) => resourceName(key));
@@ -1347,6 +1520,24 @@ function pauseReason(node) {
   }
   if ((nodeTypes[node.kind].powerIn || nodeTypes[node.kind].powerOut) && !node.powered) return "未接电力";
   return "暂停";
+}
+
+function nodeVisualState(node, runState = nodeRunState(node)) {
+  if (node.kind === "warehouse" && storeTotal(node.inputStore) >= node.capacity) {
+    return { key: "warehouse-full", label: "仓库满" };
+  }
+  if (node.kind === "miner" && storeTotal(node.outputStore) >= node.capacity) {
+    return { key: "output-blocked", label: "输出堵塞" };
+  }
+  const recipe = activeRecipe(node);
+  if (recipe) {
+    if (storeTotal(node.outputStore) >= node.capacity) return { key: "output-blocked", label: "输出堵塞" };
+    if (recipeRequiresPower(node, recipe) && !node.powered) return { key: "power-wait", label: "等待电力" };
+    if (!hasInputs(node.inputStore, recipe.inputs)) return { key: "input-missing", label: "输入不足" };
+  }
+  if (runState.key === "running") return { key: "running", label: "正常生产" };
+  if (runState.key === "paused") return { key: "input-missing", label: pauseReason(node) || "暂停" };
+  return { key: "idle", label: "未启动" };
 }
 
 function nodeRunState(node) {
@@ -1389,7 +1580,7 @@ function nodeRunState(node) {
   }
   if (activeRecipe(node)) {
     const recipe = activeRecipe(node);
-    if (storeTotal(node.outputStore) >= node.capacity || (recipe.requiresPower && !node.powered) || !hasInputs(node.inputStore, recipe.inputs)) {
+    if (storeTotal(node.outputStore) >= node.capacity || (recipeRequiresPower(node, recipe) && !node.powered) || !hasInputs(node.inputStore, recipe.inputs)) {
       return { key: "paused", label: "暂停" };
     }
     if (node.progress > 0 || node.status.includes("生产") || node.status.includes("产出") || node.status.includes("入库")) return { key: "running", label: "启动" };
@@ -1829,15 +2020,64 @@ function focusRole(nodeId, focus) {
 }
 
 function renderInventory() {
+  const recommended = recommendedBuildKinds();
+  const highlightedKind = state.goalHighlight.until > performance.now() ? state.goalHighlight.kind : null;
   document.querySelectorAll(".device-items button[data-kind]").forEach((button) => {
     const kind = button.dataset.kind;
     const value = kind === "source" ? "∞" : state.inventory[kind] || 0;
     const badge = button.querySelector("b");
     if (badge) badge.textContent = value;
     button.disabled = kind !== "source" && value <= 0;
+    button.classList.toggle("recommended", recommended.has(kind));
+    button.classList.toggle("goal-highlight", highlightedKind === kind);
   });
   const cableBadge = document.querySelector("#cable-stock");
   if (cableBadge) cableBadge.textContent = state.cableStock;
+}
+
+function recommendedBuildKinds() {
+  const step = currentGoal(collectResourceTotals()).activeStep;
+  const map = {
+    "mining.source": ["source"],
+    "mining.miner": ["miner"],
+    "mining.warehouse": ["warehouse"],
+    "smelting.furnace": ["furnace"],
+    "smelting.coal_line": ["source", "miner"],
+    "steel.kiln": ["kiln"],
+    "group.create": ["adapter_input", "adapter_output"],
+    "group.input_adapter": ["adapter_input"],
+    "group.output_adapter": ["adapter_output"],
+    "group_power.adapter": ["adapter_power"],
+    "group_power.generator": ["generator", "miner", "source"],
+    "casting.caster": ["caster"],
+    "assembly.assembler": ["assembler"]
+  };
+  return new Set(map[step?.id] || []);
+}
+
+function locateCurrentGoal() {
+  const totals = collectResourceTotals();
+  const step = currentGoal(totals).activeStep;
+  const recommended = [...recommendedBuildKinds()];
+  const findByKind = (kinds) => state.nodes.find((node) => kinds.includes(node.kind) && visibleNode(node));
+  const target = findByKind(recommended) || null;
+  if (target) {
+    centerViewportOn(target);
+    setSingleSelection(target.id);
+    setStatus(`已定位：${step?.title || nodeTitle(target)}`, "ok");
+  } else if (recommended.length) {
+    state.goalHighlight = { kind: recommended[0], until: performance.now() + 1800 };
+    setStatus(`当前建议建造：${recommended.map((kind) => nodeTypes[kind]?.name || kind).join(" / ")}`, "ok");
+  } else {
+    setStatus("当前任务需要检查已有产线连接和产出进度", "ok");
+  }
+  render();
+}
+
+function centerViewportOn(node) {
+  const rect = canvas.getBoundingClientRect();
+  state.viewport.x = rect.width / 2 - (node.x + 83) * state.viewport.scale;
+  state.viewport.y = rect.height / 2 - (node.y + 56) * state.viewport.scale;
 }
 
 function nodeRecipeSwitchHtml(node) {
@@ -1893,12 +2133,14 @@ function renderNodes() {
     }
     const type = nodeTypes[node.kind];
     const runState = nodeRunState(node);
+    const visualState = nodeVisualState(node, runState);
     const powerClass = powerVisualClass(node);
     const dimClass = focus && !focus.nodeIds.has(node.id) ? "dimmed-node" : "";
     const relationRole = focusRole(node.id, focus);
     const element = document.createElement("article");
     const canUpgrade = nodeCanUpgrade(node);
-    element.className = `node kind-${node.kind} state-${runState.key} ${powerClass} ${dimClass} ${canUpgrade ? "can-upgrade" : ""} ${isNodeSelected(node.id) ? "selected" : ""} ${state.selectedIds.length > 1 && isNodeSelected(node.id) ? "multi-selected" : ""}`;
+    const recentUpgrade = node.upgradeFlashUntil && performance.now() < node.upgradeFlashUntil;
+    element.className = `node kind-${node.kind} state-${runState.key} visual-${visualState.key} ${powerClass} ${dimClass} ${canUpgrade ? "can-upgrade" : ""} ${recentUpgrade ? "upgrade-flash" : ""} ${isNodeSelected(node.id) ? "selected" : ""} ${state.selectedIds.length > 1 && isNodeSelected(node.id) ? "multi-selected" : ""}`;
     element.dataset.id = node.id;
     element.style.left = `${node.x}px`;
     element.style.top = `${node.y}px`;
@@ -1909,6 +2151,7 @@ function renderNodes() {
         <i style="background:${node.kind === "source" ? resourceColor(node.resource) : ""}"></i>
       </div>
       <div class="node-body">
+        ${visualState.key === "warehouse-full" ? `<div class="warehouse-full-icon" title="仓库满">仓满</div>` : ""}
         ${relationRole ? `<div class="relation-badge">${relationRole}</div>` : ""}
         ${statusTagsHtml(node, runState)}
         <div class="node-desc detail-layer">${type.desc}</div>
@@ -2086,7 +2329,7 @@ function powerVisualClass(node) {
   const type = nodeTypes[node.kind];
   if (node.kind === "generator" && node.generating) return "power-generator-active";
   if (type.powerIn && node.powered) return "power-node-on";
-  if (type.powerIn && isPowerInputUsed(node.id) && !node.powered) return "power-node-starved";
+  if (type.powerIn && isPowerInputUsed(node.id) && !node.powered && recipeRequiresPower(node)) return "power-node-starved";
   return "";
 }
 
@@ -2178,7 +2421,8 @@ function renderLinks() {
     const focusDimmed = focus && !focus.logisticsLinkIds.has(link.id);
     const health = logisticsLinkHealth(link);
     appendPath(d, "link-hit", link.id);
-    appendPath(d, `link link-level-${logisticsLineLevel(link)} ${health} ${fadeLogistics || unrelatedSelected || focusDimmed ? "muted-line" : ""} ${focusDimmed ? "focus-dimmed-line" : ""} ${link.id === state.selectedLinkId ? "selected" : ""} ${related ? "related" : ""}`, link.id, link.resource);
+    const upgrading = link.upgradeFlashUntil && performance.now() < link.upgradeFlashUntil;
+    appendPath(d, `link link-level-${logisticsLineLevel(link)} ${health} ${upgrading ? "upgrade-flash-line" : ""} ${fadeLogistics || unrelatedSelected || focusDimmed ? "muted-line" : ""} ${focusDimmed ? "focus-dimmed-line" : ""} ${link.id === state.selectedLinkId ? "selected" : ""} ${related ? "related" : ""}`, link.id, link.resource);
     renderPackets(link, points, fadeLogistics || unrelatedSelected || focusDimmed, focusDimmed);
   }
   for (const item of power) {
@@ -2275,7 +2519,10 @@ function appendPath(d, className, linkId = null, resource = null, linkType = "lo
   path.setAttribute("d", d);
   path.setAttribute("class", className);
   if (linkType === "logistics" && linkId && !className.includes("hit") && !className.includes("preview")) {
-    path.style.stroke = logisticsLinkColor(state.links.find((item) => item.id === linkId));
+    const link = state.links.find((item) => item.id === linkId);
+    const config = logisticsLineConfig(link);
+    path.style.stroke = logisticsLinkColor(link);
+    path.style.strokeWidth = config.width;
   } else if (resource && !className.includes("hit")) {
     path.style.stroke = resourceColor(resource);
   }
@@ -2298,6 +2545,7 @@ function appendPath(d, className, linkId = null, resource = null, linkType = "lo
 }
 
 function renderPackets(link, points, muted = false, focusDimmed = false) {
+  const config = logisticsLineConfig(link);
   const length = polylineLength(points);
   const packets = link.packets
     .map((packet) => ({ packet, distance: clamp(packet.distance || packet.progress * length || 0, 0, length * 0.985) }))
@@ -2310,8 +2558,8 @@ function renderPackets(link, points, muted = false, focusDimmed = false) {
     const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
     circle.setAttribute("cx", point.x);
     circle.setAttribute("cy", point.y);
-    circle.setAttribute("r", 5);
-    circle.setAttribute("class", `packet ${muted ? "muted-line" : ""} ${focusDimmed ? "focus-dimmed-packet" : ""}`);
+    circle.setAttribute("r", config.packetRadius || 5);
+    circle.setAttribute("class", `packet packet-level-${logisticsLineLevel(link)} ${muted ? "muted-line" : ""} ${focusDimmed ? "focus-dimmed-packet" : ""}`);
     circle.setAttribute("fill", resourceColor(item.packet.resource));
     linksLayer.appendChild(circle);
   }
@@ -2335,6 +2583,9 @@ function renderPowerPackets(link, points, muted = false, focusDimmed = false) {
 }
 
 function renderInspector() {
+  if (!state.selectedId && state.selectedIds.length === 1) {
+    state.selectedId = state.selectedIds[0];
+  }
   if (state.selectedIds.length > 1) {
     renderMultiSelectionInspector();
     return;
@@ -2368,7 +2619,7 @@ function renderInspector() {
     <div class="info-row"><span>输入缓存</span><b>${storeText(node.inputStore)}</b></div>
     <div class="info-row"><span>输出缓存</span><b>${storeText(outputStoreFor(node))}</b></div>
     ${activeRecipe(node) ? `<div class="info-row"><span>生产状态</span><b>${node.status} ${Math.floor(node.progress * 100)}%</b></div>` : ""}
-    ${activeRecipe(node) ? `<div class="info-row"><span>效率</span><b>${node.powered && !activeRecipe(node).requiresPower ? "150%" : "100%"}</b></div>` : ""}
+    ${activeRecipe(node) ? `<div class="info-row"><span>效率</span><b>${node.powered && recipePowerMode(node) === "optional" ? "150%" : "100%"}</b></div>` : ""}
     ${node.kind === "assembler" ? `<div class="info-row"><span>机械核心</span><b>${mechanicalCoreTotal()}/10</b></div>` : ""}
     <div class="info-row"><span>容量</span><b>${Math.floor(storeTotal(node.inputStore))}/${node.capacity}</b></div>
     <div class="info-row"><span>5秒均值</span><b>${logisticsAverageThroughput().toFixed(1)} / 秒</b></div>
@@ -2484,7 +2735,7 @@ function pauseReasonForInspector(node) {
   const recipe = activeRecipe(node);
   if (recipe) {
     if (storeTotal(node.outputStore) >= node.capacity) return "输出堵塞";
-    if (recipe.requiresPower && !node.powered) return "缺少电力";
+    if (recipeRequiresPower(node, recipe) && !node.powered) return "等待电力";
     const missing = Object.entries(recipe.inputs)
       .filter(([key, amount]) => (node.inputStore[key] || 0) < amount)
       .map(([key]) => resourceName(key));
@@ -2579,7 +2830,7 @@ function productionVisualHtml(node) {
   }
   const recipe = activeRecipe(node);
   if (recipe) {
-    const powerSpeed = node.powered && !recipe.requiresPower ? 1.5 : 1;
+    const powerSpeed = node.powered && recipePowerMode(node, recipe) === "optional" ? 1.5 : 1;
     const speedPercent = Math.round(powerSpeed * nodeProductionSpeedMultiplier(node) * 100);
     return `
       <div class="inspector-section">
@@ -2689,6 +2940,9 @@ function bindInspectorControls(node) {
 }
 
 function renderInspector() {
+  if (!state.selectedId && state.selectedIds.length === 1) {
+    state.selectedId = state.selectedIds[0];
+  }
   if (state.selectedIds.length > 1) {
     renderMultiSelectionInspector();
     return;
@@ -2746,6 +3000,15 @@ function renderInspector() {
     </div>
   `;
   bindInspectorControls(node);
+}
+
+function refreshInspectorSafely() {
+  try {
+    renderInspector();
+  } catch (error) {
+    console.error(error);
+    inspector.innerHTML = `<div class="muted">当前节点信息刷新失败：${error?.message || error}</div>`;
+  }
 }
 
 function createGroupFromSelection() {
@@ -3245,6 +3508,7 @@ function renderLinkInspector() {
   const lineConfig = link ? logisticsLineConfig(link) : null;
   const actualEmitRate = link ? logisticsEmitRate(link) : 0;
   const sourceRate = link ? outputPortRate(from, link.fromPort) : 0;
+  const lineLoadText = link && link.packets.length >= logisticsPacketLimit(link) ? "堵塞" : link && link.packets.length >= logisticsWarnPacketLimit(link) ? "高负载" : "顺畅";
   inspector.innerHTML = link && from && to
     ? `
       <div class="info-row"><span>类型</span><b>物流连线</b></div>
@@ -3253,6 +3517,7 @@ function renderLinkInspector() {
       <div class="info-row"><span>目标</span><b>${nodeTitle(to)} 输入 ${link.toPort + 1}</b></div>
       <div class="info-row"><span>锁定资源</span><b>${resourceName(link.resource)}</b></div>
       <div class="info-row"><span>在途容量</span><b>${link.packets.length}/${logisticsPacketLimit(link)}</b></div>
+      <div class="info-row"><span>拥堵状态</span><b>${lineLoadText}</b></div>
       <div class="info-row"><span>输出端能力</span><b>${sourceRate} / 秒</b></div>
       <div class="info-row"><span>线路发包</span><b>${link.rate} / 秒</b></div>
       <div class="info-row"><span>实际发包</span><b>${actualEmitRate} / 秒</b></div>
@@ -3642,6 +3907,14 @@ function groupHasDeclaredPorts() {
   });
 }
 
+function groupHasInputPort() {
+  return state.nodes.some((group) => group.kind === "group" && rebuildGroupInterfaces(group).inputs.length > 0);
+}
+
+function groupHasOutputPort() {
+  return state.nodes.some((group) => group.kind === "group" && rebuildGroupInterfaces(group).outputs.length > 0);
+}
+
 function workingGroupSteelLine() {
   return countNodes("group") > 0
     && groupHasDeclaredPorts()
@@ -3680,129 +3953,188 @@ function deviceProductionProgress() {
   };
 }
 
-function goalStep(done, text) {
-  return { done, text };
+function goalStep(id, liveDone, title, why, next, complete, progress = null) {
+  return {
+    id,
+    liveDone: Boolean(liveDone),
+    done: Boolean(state.completedGoalSteps[id]) || Boolean(liveDone),
+    title,
+    text: title,
+    why,
+    next,
+    complete,
+    progress
+  };
+}
+
+function goalProgress(label, value, target) {
+  return {
+    label,
+    value: Math.max(0, Math.floor(value || 0)),
+    target: Math.max(1, Math.floor(target || 1))
+  };
+}
+
+function goalStepProgressHtml(step) {
+  const progress = step?.progress;
+  if (!progress) {
+    return `
+      <div class="goal-step-progress ${step?.done ? "done" : ""}">
+        <div class="goal-step-progress-top"><span>当前进度</span><b>${step?.done ? "已完成" : "等待完成"}</b></div>
+        <div class="goal-step-progress-bar"><i style="width:${step?.done ? 100 : 0}%"></i></div>
+      </div>
+    `;
+  }
+  const value = step.done ? progress.target : Math.min(progress.target, progress.value);
+  const width = Math.min(100, Math.round((value / progress.target) * 100));
+  return `
+    <div class="goal-step-progress ${step.done ? "done" : ""}">
+      <div class="goal-step-progress-top"><span>当前进度</span><b>${progress.label} ${value} / ${progress.target}</b></div>
+      <div class="goal-step-progress-bar"><i style="width:${width}%"></i></div>
+    </div>
+  `;
+}
+
+function goalChapter({ id, title, detail, reward = {}, steps }) {
+  const progress = steps.filter((step) => step.done).length;
+  return {
+    id,
+    title,
+    detail,
+    reward,
+    steps,
+    progress,
+    target: steps.length,
+    done: steps.length > 0 && steps.every((step) => step.done),
+    activeStep: steps.find((step) => !step.done) || steps[steps.length - 1]
+  };
+}
+
+function syncGoalStepCompletion(goals) {
+  let changed = false;
+  for (const goal of goals) {
+    for (const step of goal.steps || []) {
+      if (step.liveDone && !state.completedGoalSteps[step.id]) {
+        state.completedGoalSteps[step.id] = true;
+        changed = true;
+      }
+    }
+  }
+  return changed;
 }
 
 function goalDefinitions(totals = collectResourceTotals()) {
   const cast = castingProgress();
   const devices = deviceProductionProgress();
+  const hasIronSource = state.nodes.some((node) => node.kind === "source" && node.resource === "iron_ore");
+  const hasCoalSource = state.nodes.some((node) => node.kind === "source" && node.resource === "coal");
+  const hasIronFurnaceInput = state.nodes.some((node) => node.kind === "furnace" && (node.inputStore.iron_ore || 0) >= 1);
+  const hasCoalFurnaceInput = state.nodes.some((node) => node.kind === "furnace" && (node.inputStore.coal || 0) >= 1);
+  const hasKilnIronInput = state.nodes.some((node) => node.kind === "kiln" && (node.inputStore.iron_ingot || 0) >= 1);
+  const hasKilnCoalInput = state.nodes.some((node) => node.kind === "kiln" && (node.inputStore.coal || 0) >= 1);
+  const hasGroup = countNodes("group") > 0;
+  const hasAdapterInput = countNodes("adapter_input") > 0 || groupHasAdapter("adapter_input");
+  const hasAdapterOutput = countNodes("adapter_output") > 0 || groupHasAdapter("adapter_output");
+  const hasAdapterPower = countNodes("adapter_power") > 0 || groupHasAdapter("adapter_power");
+  const castKeys = ["iron_plate", "iron_rod", "copper_wire"];
+  const deviceKeys = ["miner_device", "furnace_device", "warehouse_device", "generator_device"];
+
   return [
-    {
-      id: "tutorial_mining",
-      title: "任务 1：建立铁矿采集链",
-      detail: "建立铁矿源、采矿机和仓库，让铁矿进入仓库。",
-      progress: Math.min(30, productionTotal("iron_ore", totals)),
-      target: 30,
-      done: countNodes("source") > 0 && countNodes("miner") > 0 && countNodes("warehouse") > 0 && hasResourceLink("source", "miner", "iron_ore") && hasResourceLink("miner", "warehouse", "iron_ore") && productionTotal("iron_ore", totals) >= 30 && warehouseHasResource("iron_ore", 1),
+    goalChapter({
+      id: "chapter_mining",
+      title: "章节 1：基础采矿",
+      detail: "学会把矿源通过采矿机变成可运输矿物，并用仓库存储。",
       reward: { warehouse: 1, furnace: 1 },
       steps: [
-        goalStep(state.nodes.some((node) => node.kind === "source" && node.resource === "iron_ore"), "放置铁矿源"),
-        goalStep(countNodes("miner") > 0, "放置采矿机"),
-        goalStep(countNodes("warehouse") > 0, "放置仓库"),
-        goalStep(hasResourceLink("source", "miner", "iron_ore"), "连接铁矿源到采矿机"),
-        goalStep(hasResourceLink("miner", "warehouse", "iron_ore") && warehouseHasResource("iron_ore", 1), "采矿机输出铁矿到仓库")
+        goalStep("mining.source", hasIronSource, "放置铁矿源", "矿源是原始储量，不会直接变成可加工矿物。", "从底部资源菜单选择铁矿源，放到画布上。", "画布上存在铁矿源。"),
+        goalStep("mining.miner", countNodes("miner") > 0, "放置采矿机", "采矿机负责把矿源转成铁矿。", "从生产菜单放置采矿机，放在铁矿源右侧。", "画布上存在采矿机。"),
+        goalStep("mining.source_to_miner", hasResourceLink("source", "miner", "iron_ore"), "连接矿源到采矿机", "没有输入矿源时，采矿机不会开采。", "从铁矿源输出口拖线到采矿机输入口。", "铁矿源和采矿机之间存在物流线。"),
+        goalStep("mining.warehouse", countNodes("warehouse") > 0, "放置仓库", "仓库用于稳定存储单一资源，避免产物无处可去。", "放置仓库，准备接收采矿机输出。", "画布上存在仓库。"),
+        goalStep("mining.store_iron", hasResourceLink("miner", "warehouse", "iron_ore") && productionTotal("iron_ore", totals) >= 30, "把铁矿送入仓库", "最小采矿线是矿源 -> 采矿机 -> 仓库。", "从采矿机输出口连接到仓库输入口，等待铁矿累计到 30。", "累计产出铁矿 30。", goalProgress("铁矿产出", productionTotal("iron_ore", totals), 30))
       ]
-    },
-    {
-      id: "tutorial_iron_ingot",
-      title: "任务 2：熔炼铁锭",
-      detail: "建立熔炉，把铁矿和煤矿送入熔炉，生产铁锭并存入仓库。",
-      progress: Math.min(20, productionTotal("iron_ingot", totals)),
-      target: 20,
-      done: countNodes("furnace") > 0 && productionTotal("iron_ingot", totals) >= 20 && warehouseHasResource("iron_ingot", 1),
+    }),
+    goalChapter({
+      id: "chapter_smelting",
+      title: "章节 2：基础熔炼",
+      detail: "学会多材料输入：铁矿和煤矿一起进入熔炉，产出铁锭。",
       reward: { miner: 1, furnace: 1, cableStock: 4 },
       steps: [
-        goalStep(countNodes("furnace") > 0, "放置熔炉并选择铁锭配方"),
-        goalStep(productionTotal("coal", totals) > 0, "建立煤矿采集线，熔炉需要煤"),
-        goalStep(productionTotal("iron_ingot", totals) >= 1, "熔炉产出第一块铁锭"),
-        goalStep(warehouseHasResource("iron_ingot", 1), "把铁锭送入仓库")
+        goalStep("smelting.furnace", countNodes("furnace") > 0, "放置熔炉", "熔炉把铁矿加工成铁锭。", "从生产菜单放置熔炉，选择铁锭配方。", "画布上存在熔炉。"),
+        goalStep("smelting.coal_line", hasCoalSource && productionTotal("coal", totals) >= 10, "建立煤矿线", "铁锭配方需要铁矿和煤，缺煤时熔炉会暂停。", "放置煤矿源和采矿机，让煤进入仓库或熔炉。", "累计产出煤矿 10。", goalProgress("煤矿产出", productionTotal("coal", totals), 10)),
+        goalStep("smelting.feed_furnace", hasIronFurnaceInput && hasCoalFurnaceInput, "给熔炉输入铁矿和煤", "多输入设备必须同时满足配方材料。", "把铁矿线和煤矿线都接入熔炉输入口。", "熔炉缓存中同时出现铁矿和煤。"),
+        goalStep("smelting.first_ingot", productionTotal("iron_ingot", totals) >= 1, "产出第一块铁锭", "生产结果会从设备输出口进入物流线。", "等待熔炉进度条完成一次。", "累计产出铁锭 1。", goalProgress("铁锭产出", productionTotal("iron_ingot", totals), 1)),
+        goalStep("smelting.store_ingot", warehouseHasResource("iron_ingot", 1) && productionTotal("iron_ingot", totals) >= 20, "把铁锭送入仓库", "产物要输出，否则设备会因为输出堵塞停住。", "把熔炉输出接到空仓库，累计铁锭 20。", "仓库收到铁锭，累计产出铁锭 20。", goalProgress("铁锭产出", productionTotal("iron_ingot", totals), 20))
       ]
-    },
-    {
-      id: "tutorial_steel_ingot",
-      title: "任务 3：高温熔炼钢锭",
-      detail: "用高温熔炉接收铁锭和煤矿，生产钢锭并输出到仓库。",
-      progress: Math.min(15, productionTotal("steel_ingot", totals)),
-      target: 15,
-      done: countNodes("kiln") > 0 && productionTotal("steel_ingot", totals) >= 15 && warehouseHasResource("steel_ingot", 1),
+    }),
+    goalChapter({
+      id: "chapter_steel",
+      title: "章节 3：进阶冶炼",
+      detail: "学会前置产物会成为后续产线原料：铁锭 + 煤 -> 钢锭。",
       reward: { kiln: 1, warehouse: 1 },
       steps: [
-        goalStep(countNodes("kiln") > 0, "放置高温熔炉"),
-        goalStep(productionTotal("iron_ingot", totals) >= 20, "保证铁锭持续供给"),
-        goalStep(productionTotal("steel_ingot", totals) >= 1, "产出第一块钢锭"),
-        goalStep(warehouseHasResource("steel_ingot", 1), "把钢锭送入仓库")
+        goalStep("steel.kiln", countNodes("kiln") > 0, "放置高温熔炉", "高温熔炉用于生产进阶金属。", "从生产菜单放置高温熔炉。", "画布上存在高温熔炉。"),
+        goalStep("steel.feed_kiln", hasKilnIronInput && hasKilnCoalInput, "输入铁锭和煤", "钢锭需要铁锭和煤，铁锭不足会拖慢后续产线。", "把铁锭仓库和煤矿线接入高温熔炉。", "高温熔炉缓存中同时出现铁锭和煤。"),
+        goalStep("steel.first_steel", productionTotal("steel_ingot", totals) >= 1, "产出第一块钢锭", "钢是后续铸造和组装的重要材料。", "等待高温熔炉完成一次生产。", "累计产出钢锭 1。", goalProgress("钢锭产出", productionTotal("steel_ingot", totals), 1)),
+        goalStep("steel.store_steel", warehouseHasResource("steel_ingot", 1) && productionTotal("steel_ingot", totals) >= 15, "把钢锭送入仓库", "稳定存储钢锭，后面才能持续加工。", "把高温熔炉输出接到仓库，累计钢锭 15。", "仓库收到钢锭，累计产出钢锭 15。", goalProgress("钢锭产出", productionTotal("steel_ingot", totals), 15))
       ]
-    },
-    {
-      id: "tutorial_group",
-      title: "任务 4：封装钢锭产线",
-      detail: "用封装输入和封装输出声明端口，把钢锭产线封装成一个可复用节点。",
-      progress: workingGroupSteelLine() ? 10 : Math.min(10, Math.max(0, productionTotal("steel_ingot", totals) - 15)),
-      target: 10,
-      done: workingGroupSteelLine(),
+    }),
+    goalChapter({
+      id: "chapter_group",
+      title: "章节 4：封装物流",
+      detail: "理解封装输入和封装输出：资源如何进组、产物如何出组。",
       reward: { adapter_input: 1, adapter_output: 1, adapter_power: 1 },
       steps: [
-        goalStep(countNodes("adapter_input") > 0, "组内放置封装输入"),
-        goalStep(countNodes("adapter_output") > 0, "组内放置封装输出"),
-        goalStep(countNodes("group") > 0, "多选产线并创建封装分组"),
-        goalStep(groupHasDeclaredPorts(), "组外端口显示对应资源"),
-        goalStep(productionTotal("steel_ingot", totals) >= 25 && warehouseHasResource("steel_ingot", 1), "封装后继续生产 10 个钢锭")
+        goalStep("group.create", hasGroup, "创建封装组", "封装组可以把一段产线收进一个大节点里。", "多选一段产线，点击创建分组，然后双击进入组内。", "画布上存在封装组。"),
+        goalStep("group.input_adapter", hasAdapterInput, "放置封装输入", "封装输入负责把组外资源送进组内。", "进入组内，放置封装输入节点。", "组内或分组中存在封装输入。"),
+        goalStep("group.input_mapping", groupHasInputPort(), "看到输入端口映射", "组外输入 1 会对应组内封装输入的输出 1。", "从组外连接资源到封装组输入口，并观察组内封装输入端口。", "封装组声明出至少一个输入端口。"),
+        goalStep("group.output_adapter", hasAdapterOutput && groupHasOutputPort(), "放置并连接封装输出", "封装输出负责把组内产物送回组外。", "在组内放置封装输出，并把组内设备输出接进去。", "封装组声明出至少一个输出端口。"),
+        goalStep("group.working", workingGroupSteelLine(), "封装后继续生产", "当组外只需要连接封装组时，这条产线就变成了可复用黑盒。", "让封装组继续输出钢锭到仓库。", "封装后钢锭产量继续增长并进入仓库。", goalProgress("钢锭产出", productionTotal("steel_ingot", totals), 25))
       ]
-    },
-    {
-      id: "tutorial_power",
-      title: "任务 5：给封装组供电",
-      detail: "组内建立封装电力节点，组外建立煤电链路，把电力送入分组。",
-      progress: groupPowerConnected() && state.power.generation > 0 && state.power.demand > 0 && !state.power.overload ? 1 : 0,
-      target: 1,
-      done: groupPowerConnected() && countNodes("generator") > 0 && state.power.generation > 0 && state.power.demand > 0 && !state.power.overload,
+    }),
+    goalChapter({
+      id: "chapter_group_power",
+      title: "章节 5：封装电力",
+      detail: "理解封装电力：组外供电如何进入组内设备。",
       reward: { generator: 1, pole: 2, cableStock: 8 },
       steps: [
-        goalStep(groupHasAdapter("adapter_power"), "组内放置封装电力节点"),
-        goalStep(groupPowerConnected(), "封装电力输出连接 2 个熔炉和 1 个高温熔炉"),
-        goalStep(countNodes("generator") > 0 && productionTotal("coal", totals) > 0, "组外建立煤矿到发电机链路"),
-        goalStep(state.power.generation > 0 && state.power.demand > 0 && !state.power.overload, "发电机连接分组电力输入并保持稳定")
+        goalStep("group_power.adapter", hasAdapterPower, "放置封装电力", "封装电力负责把组外电力送到组内设备。", "进入组内，放置封装电力节点。", "组内或分组中存在封装电力。"),
+        goalStep("group_power.internal_links", groupPowerConnected(), "连接组内设备电力", "封装电力像组内电杆，负责向设备分配电力。", "从封装电力输出连接到组内熔炉或高温熔炉。", "封装电力至少连接到多个组内生产设备。"),
+        goalStep("group_power.generator", countNodes("generator") > 0 && productionTotal("coal", totals) > 0, "建立煤电链路", "发电机需要煤矿输入才会发电。", "组外建立煤矿 -> 采矿机 -> 发电机链路。", "画布上有发电机，并且煤矿已经产出。"),
+        goalStep("group_power.stable", state.power.generation > 0 && state.power.demand > 0 && !state.power.overload, "给封装组稳定供电", "组外电力输入会进入组内封装电力节点。", "把发电机或电杆连接到封装组电力输入口。", "电网有发电和耗电，并且没有过载。")
       ]
-    },
-    {
-      id: "tutorial_casting",
-      title: "任务 6：建立铸造产线",
-      detail: "用铸造厂生产铁板、铁棒、铜板、铜棒、铜线、钢板和钢棒，每种累计 50。",
-      progress: cast.progress,
-      target: cast.target,
-      done: cast.done,
+    }),
+    goalChapter({
+      id: "chapter_casting",
+      title: "章节 6：铸造加工",
+      detail: "把金属锭加工成板、棒、线，准备进入设备制造。",
       reward: { caster: 2, assembler: 1 },
-      steps: cast.required.map((key) => goalStep(productionTotal(key, totals) >= 50, `${resourceName(key)} 50`))
-    },
-    {
-      id: "tutorial_assembly",
-      title: "任务 7：生产基础设备",
-      detail: "建立组装厂，生产采矿机、熔炉、仓库和发电机设备，各 10 个。",
-      progress: devices.progress,
-      target: devices.target,
-      done: countNodes("assembler") > 0 && devices.done,
+      steps: [
+        goalStep("casting.caster", countNodes("caster") > 0, "放置铸造厂", "铸造厂把金属锭加工成部件材料。", "放置铸造厂，并打开配方选择。", "画布上存在铸造厂。"),
+        ...castKeys.map((key) => goalStep(`casting.${key}`, productionTotal(key, totals) >= 50, `累计生产 ${resourceName(key)} 50`, `${resourceName(key)} 是后续设备和核心材料的基础。`, `切换铸造厂配方，建立 ${resourceName(key)} 产线。`, `${resourceName(key)} 累计产出 50。`, goalProgress(`${resourceName(key)}产出`, productionTotal(key, totals), 50)))
+      ]
+    }),
+    goalChapter({
+      id: "chapter_assembly",
+      title: "章节 7：组装制造",
+      detail: "学会设备不是无限免费，需要通过组装厂制造。",
       reward: { assembler: 1, cableStock: 10 },
       steps: [
-        goalStep(countNodes("assembler") > 0, "放置组装厂"),
-        ...devices.required.map((key) => goalStep(productionTotal(key, totals) >= 10, `${resourceName(key)} 10`))
+        goalStep("assembly.assembler", countNodes("assembler") > 0, "放置组装厂", "组装厂用于制造设备和机械核心。", "从生产菜单放置组装厂。", "画布上存在组装厂。"),
+        ...deviceKeys.map((key) => goalStep(`assembly.${key}`, productionTotal(key, totals) >= 10, `制造 ${resourceName(key)} 10`, `${resourceName(key)} 会进入建筑库存，用来继续扩建产线。`, `切换组装厂配方，制造 ${resourceName(key)}。`, `${resourceName(key)} 累计产出 10。`, goalProgress(`${resourceName(key)}产出`, productionTotal(key, totals), 10)))
       ]
-    },
-    {
-      id: "mechanical_core",
-      title: "任务 8：完成一阶段核心目标",
-      detail: "建立稳定的多产线供应，累计生产 50 个机械核心。",
-      progress: Math.min(50, productionTotal("mechanical_core", totals)),
-      target: 50,
-      done: productionTotal("mechanical_core", totals) >= 50 && warehouseHasResource("mechanical_core", 1),
+    }),
+    goalChapter({
+      id: "chapter_core",
+      title: "章节 8：机械核心",
+      detail: "整合采矿、熔炼、封装、电力、铸造和组装，完成第一阶段目标。",
       reward: {},
       steps: [
-        goalStep(countNodes("assembler") > 0, "建立组装厂"),
-        goalStep(state.power.generation > 0 && !state.power.overload, "保持稳定供电"),
-        goalStep(productionTotal("mechanical_core", totals) >= 50, "累计生产 50 个机械核心"),
-        goalStep(warehouseHasResource("mechanical_core", 1), "机械核心进入仓库")
+        goalStep("core.materials", ["industrial_frame", "power_unit", "gear", "cable"].every((key) => productionTotal(key, totals) > 0), "准备核心材料", "机械核心需要多条前置产线稳定供应。", "让工业框架、动力组件、齿轮和线缆都开始产出。", "核心材料都有累计产出。"),
+        goalStep("core.power", state.power.generation > 0 && !state.power.overload, "保持稳定供电", "机械核心配方需要电力，过载会导致生产停摆。", "扩大发电链路，保持电网不过载。", "电网有发电且没有过载。"),
+        goalStep("core.first", productionTotal("mechanical_core", totals) >= 10, "生产第一批机械核心", "第一批核心证明整条工业链已经打通。", "在组装厂选择机械核心配方，累计生产 10。", "机械核心累计产出 10。", goalProgress("机械核心产出", productionTotal("mechanical_core", totals), 10)),
+        goalStep("core.scale", productionTotal("mechanical_core", totals) >= 50 && warehouseHasResource("mechanical_core", 1), "扩产到 50 个机械核心", "单产线产能不足时，需要复制多条前置产线。", "扩建矿线、熔炼线、铸造线和组装线，累计机械核心 50。", "机械核心累计产出 50 并进入仓库。", goalProgress("机械核心产出", productionTotal("mechanical_core", totals), 50))
       ]
-    }
+    })
   ];
 }
 
@@ -3818,7 +4150,7 @@ function rewardText(reward) {
     if (key === "cableStock") parts.push(`线缆 +${value}`);
     else parts.push(`${nodeTypes[key]?.name || key} +${value}`);
   }
-  return parts.join(" / ") || "解锁下一阶段";
+  return parts.join(" / ") || "阶段推进";
 }
 
 function showGoalReward(goal, nextGoal) {
@@ -3829,14 +4161,15 @@ function showGoalReward(goal, nextGoal) {
     <div class="reward-chip-row">
       ${Object.entries(goal.reward || {}).filter(([, value]) => value).map(([key, value]) => `<span class="reward-chip">${key === "cableStock" ? "线缆" : nodeTypes[key]?.name || key} +${value}</span>`).join("") || `<span class="reward-chip">阶段推进</span>`}
     </div>
-    ${nextGoal ? `<div class="goal-next-card"><b>下一任务</b><br>${nextGoal.title}<br><span class="muted">${nextGoal.detail}</span></div>` : `<div class="goal-next-card"><b>第一阶段完成</b><br>你已经掌握基础产线、封装、电力、铸造和组装。</div>`}
+    ${nextGoal ? `<div class="goal-next-card"><b>下一章节</b><br>${nextGoal.title}<br><span class="muted">${nextGoal.detail}</span></div>` : `<div class="goal-next-card"><b>第一阶段完成</b><br>你已经掌握基础产线、封装、电力、铸造和组装。</div>`}
   `;
   if (!goalRewardDialog.open) goalRewardDialog.showModal();
 }
 
 function applyGoalRewards() {
   const totals = collectResourceTotals();
-  const goals = goalDefinitions(totals);
+  let goals = goalDefinitions(totals);
+  if (syncGoalStepCompletion(goals)) goals = goalDefinitions(totals);
   for (let index = 0; index < goals.length; index += 1) {
     const goal = goals[index];
     if (!goal.done || state.claimedGoalRewards[goal.id]) continue;
@@ -3845,8 +4178,8 @@ function applyGoalRewards() {
       else if (state.inventory[key] !== undefined) state.inventory[key] += value;
     }
     state.claimedGoalRewards[goal.id] = true;
-    if (goal.id === "mechanical_core") state.completed = true;
-    setStatus(`任务完成：${goal.title}，奖励 ${rewardText(goal.reward)}`, "ok");
+    if (goal.id === "chapter_core") state.completed = true;
+    setStatus(`章节完成：${goal.title}，奖励 ${rewardText(goal.reward)}`, "ok");
     showGoalReward(goal, goals[index + 1] || null);
     break;
   }
@@ -3854,48 +4187,57 @@ function applyGoalRewards() {
 
 function goalHints(totals = collectResourceTotals()) {
   const goal = currentGoal(totals);
-  const steps = goal.steps || [];
-  const nextStep = steps.find((step) => !step.done);
+  const step = goal.activeStep;
   const hints = [];
-  if (nextStep) hints.push(`下一步：${nextStep.text}`);
-  if (goal.id === "tutorial_iron_ingot") hints.push("熔炉需要铁矿和煤矿两种输入，缺煤时先单独做一条煤线。");
-  if (goal.id === "tutorial_group") hints.push("封装输入控制组外输入端口，封装输出控制组外输出端口。");
-  if (goal.id === "tutorial_power") hints.push("电杆可以把发电机输出分成 3 路，线缆负载会汇总下游消耗。");
-  if (goal.id === "tutorial_casting" || goal.id === "mechanical_core") hints.push("单条产线产能会逐渐不够，复制多条矿线和熔炼线能保持连续生产。");
+  if (step?.next) hints.push(`下一步：${step.next}`);
+  if (step?.why) hints.push(`目标说明：${step.why}`);
   if (state.power.overload) hints.push("电网已超载，增加发电机或减少接入设备。");
   return hints.slice(0, 3);
 }
 
 function renderGoals() {
   const totals = collectResourceTotals();
-  const goals = goalDefinitions(totals);
+  let goals = goalDefinitions(totals);
+  if (syncGoalStepCompletion(goals)) goals = goalDefinitions(totals);
   const goal = currentGoal(totals);
   const index = goals.findIndex((item) => item.id === goal.id);
+  const stepIndex = Math.max(0, goal.steps.findIndex((step) => !step.done));
+  const activeStep = goal.activeStep;
   const progress = goal.target ? Math.min(100, Math.floor((goal.progress / goal.target) * 100)) : 100;
   if (missionStrip) {
-    const nextStep = (goal.steps || []).find((step) => !step.done);
     missionStrip.innerHTML = `
       <div>
         <b>${goal.title}</b>
-        <span>${nextStep ? nextStep.text : goal.detail}</span>
+        <span>${activeStep ? activeStep.title : goal.detail}</span>
       </div>
-      <strong>${Math.floor(goal.progress)} / ${goal.target}</strong>
+      <strong>${goal.progress} / ${goal.target}</strong>
     `;
   }
   goalPanel.innerHTML = `
-    <div class="goal-stage">主线 ${index + 1} / ${goals.length}</div>
+    <div class="goal-stage">章节 ${index + 1} / ${goals.length} · 小任务 ${Math.min(stepIndex + 1, goal.target)} / ${goal.target}</div>
     <div class="goal-title">${goal.title}</div>
     <div class="goal-detail">${goal.detail}</div>
     <div class="goal-progress"><span style="width:${progress}%"></span></div>
-    <div class="info-row"><span>进度</span><b>${Math.floor(goal.progress)} / ${goal.target}</b></div>
+    ${activeStep ? `
+      <div class="goal-current-step">
+        <b>当前目标：${activeStep.title}</b>
+        <p><span>目标说明</span>${activeStep.why}</p>
+        <p><span>下一步</span>${activeStep.next}</p>
+        <p><span>完成条件</span>${activeStep.complete}</p>
+        ${goalStepProgressHtml(activeStep)}
+        <button class="goal-locate-button" id="locate-current-goal" type="button">定位当前目标</button>
+      </div>
+    ` : ""}
+    <div class="info-row"><span>章节进度</span><b>${goal.progress} / ${goal.target}</b></div>
     <div class="info-row"><span>完成奖励</span><b>${rewardText(goal.reward)}</b></div>
     <div class="goal-checklist">
-      ${(goal.steps || []).map((step) => `<div class="${step.done ? "done" : ""}"><i></i><span>${step.text}</span></div>`).join("")}
+      ${(goal.steps || []).map((step) => `<div class="${step.done ? "done" : ""}"><i></i><span>${step.title}</span></div>`).join("")}
     </div>
     <div class="goal-hints">
       ${goalHints(totals).map((hint) => `<div>${hint}</div>`).join("")}
     </div>
   `;
+  document.querySelector("#locate-current-goal")?.addEventListener("click", locateCurrentGoal);
 }
 
 function renderResourceOverview() {
@@ -4133,7 +4475,7 @@ function collectAlerts() {
     const hasInputLink = state.links.some((link) => link.toNode === node.id);
     if (activeRecipe(node) && node.status.startsWith("缺少") && hasInputLink) alerts.push({ level: "warn", text: `${nodeTitle(node)} ${node.status}`, nodeId: node.id });
     if (node.status === "输出堵塞") alerts.push({ level: "critical", text: `${nodeTitle(node)} 输出堵塞`, nodeId: node.id });
-    if (node.status === "机械核心需要通电") alerts.push({ level: "warn", text: `${nodeTitle(node)} 机械核心缺电`, nodeId: node.id });
+    if (node.status === "等待电力") alerts.push({ level: "warn", text: `${nodeTitle(node)} 等待电力`, nodeId: node.id });
     if (node.kind === "warehouse" && storeTotal(node.inputStore) >= node.capacity) alerts.push({ level: "critical", text: `${nodeTitle(node)} 已满`, nodeId: node.id });
     if (node.kind === "generator" && state.powerLinks.some((link) => link.fromNode === node.id) && !node.generating) alerts.push({ level: "warn", text: `${nodeTitle(node)} 缺少煤矿`, nodeId: node.id });
   }
@@ -4282,12 +4624,17 @@ function startNodeDrag(event) {
   if (event.target.classList.contains("port") || event.button !== 0) return;
   event.stopPropagation();
   const node = nodeById(event.currentTarget.dataset.id);
+  if (!node) return;
   if (event.shiftKey || event.ctrlKey || event.metaKey) {
     toggleNodeSelection(node.id);
+    refreshInspectorSafely();
+    renderNodes();
     window.addEventListener("pointerup", () => setTimeout(render, 0), { once: true });
     return;
   }
   if (!isNodeSelected(node.id)) setSingleSelection(node.id);
+  refreshInspectorSafely();
+  renderNodes();
   const movingIds = selectedNodeIds();
   const startPositions = movingIds
     .map((id) => nodeById(id))
@@ -4911,8 +5258,8 @@ function runIndustry(node, dt) {
   const recipe = activeRecipe(node);
   if (!recipe) return;
   clampRecipeInputStore(node);
-  if (recipe.requiresPower && !node.powered) {
-    node.status = "机械核心需要通电";
+  if (recipeRequiresPower(node, recipe) && !node.powered) {
+    node.status = "等待电力";
     node.progress = 0;
     return;
   }
@@ -4929,7 +5276,7 @@ function runIndustry(node, dt) {
     node.progress = 0;
     return;
   }
-  const speed = node.powered && !recipe.requiresPower ? 1.5 : 1;
+  const speed = node.powered && recipePowerMode(node, recipe) === "optional" ? 1.5 : 1;
   node.status = speed > 1 ? "通电加速生产中" : "生产中";
   node.progress += (dt * speed * nodeProductionSpeedMultiplier(node)) / recipe.time;
   if (node.progress < 1) return;
@@ -4972,6 +5319,7 @@ function createSaveData() {
     cableStock: state.cableStock,
     completed: state.completed,
     claimedGoalRewards: state.claimedGoalRewards,
+    completedGoalSteps: state.completedGoalSteps,
     productionStats: state.productionStats,
     logisticsPeak: state.logisticsPeak,
     nextId
@@ -5075,6 +5423,7 @@ function loadSaveData(data, name = "本地存档") {
   state.cableStock = data.cableStock ?? state.cableStock;
   state.completed = Boolean(data.completed);
   state.claimedGoalRewards = data.claimedGoalRewards || {};
+  state.completedGoalSteps = data.completedGoalSteps || {};
   state.productionStats = { ...(data.productionStats || {}) };
   state.logisticsHistory = [];
   state.logisticsPeak = data.logisticsPeak || 0;
@@ -5216,6 +5565,7 @@ function buildDemoLine() {
   state.inventory = { miner: 4, furnace: 4, kiln: 5, caster: 5, assembler: 5, generator: 0, pole: 4, warehouse: 4, adapter_input: 3, adapter_output: 3, adapter_power: 2 };
   state.cableStock = 12;
   state.claimedGoalRewards = {};
+  state.completedGoalSteps = {};
   state.productionStats = {};
   state.logisticsHistory = [];
   state.logisticsPeak = 0;
@@ -5304,6 +5654,8 @@ document.querySelectorAll("[data-device-tab]").forEach((button) => {
 document.querySelector("#close-recipe-dialog").addEventListener("click", () => recipeDialog.close());
 document.querySelector("#close-save-dialog").addEventListener("click", () => saveDialog.close());
 closeGoalRewardButton?.addEventListener("click", () => goalRewardDialog.close());
+document.querySelector("#close-upgrade-dialog")?.addEventListener("click", () => upgradeDialog?.close());
+upgradeDialogCancel?.addEventListener("click", () => upgradeDialog?.close());
 document.querySelector("#create-save-slot").addEventListener("click", () => saveToSlot());
 document.querySelector("#open-gm-panel")?.addEventListener("click", openGmPasswordGate);
 document.querySelector("#close-gm-dialog")?.addEventListener("click", () => gmDialog?.close());
@@ -5435,6 +5787,7 @@ document.querySelector("#clear-all").addEventListener("click", () => {
   state.links = [];
   state.powerLinks = [];
   state.claimedGoalRewards = {};
+  state.completedGoalSteps = {};
   state.productionStats = {};
   state.logisticsHistory = [];
   state.logisticsPeak = 0;
