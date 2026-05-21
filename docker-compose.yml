@@ -1,0 +1,13 @@
+services:
+  factory:
+    build: .
+    container_name: factory-game
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      PORT: 5174
+    ports:
+      - "${PORT:-5174}:5174"
+    volumes:
+      - ./data:/app/data

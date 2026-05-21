@@ -233,6 +233,11 @@ const upgradeDialogSubtitle = document.querySelector("#upgrade-dialog-subtitle")
 const upgradeDialogBody = document.querySelector("#upgrade-dialog-body");
 const upgradeDialogConfirm = document.querySelector("#confirm-upgrade-dialog");
 const upgradeDialogCancel = document.querySelector("#cancel-upgrade-dialog");
+const confirmDialog = document.querySelector("#confirm-dialog");
+const confirmDialogTitle = document.querySelector("#confirm-dialog-title");
+const confirmDialogMessage = document.querySelector("#confirm-dialog-message");
+const confirmDialogOk = document.querySelector("#ok-confirm-dialog");
+const confirmDialogCancel = document.querySelector("#cancel-confirm-dialog");
 const gmDialog = document.querySelector("#gm-dialog");
 const gmCategorySelect = document.querySelector("#gm-category");
 const gmResourceSelect = document.querySelector("#gm-resource");
@@ -247,9 +252,18 @@ const loginForm = document.querySelector(".login-card");
 const loginUser = document.querySelector("#login-user");
 const loginPassword = document.querySelector("#login-password");
 const loginError = document.querySelector("#login-error");
+const registerButton = document.querySelector("#register-submit");
+const logoutButton = document.querySelector("#logout-game");
 const menuCanvases = [...document.querySelectorAll("[data-menu-canvas]")];
 
 let saveDialogMode = "save";
+let currentUser = null;
+let serverSaveSlots = [];
+let serverOnline = false;
+let lastServerOnline = null;
+
+const CLIENT_SAVE_VERSION = 2;
+const CLIENT_GAME_VERSION = "0.1.0";
 
 function defaultInventory() {
   return {
@@ -276,7 +290,7 @@ function showScreen(screenName) {
 }
 
 function closeOpenDialogs() {
-  [saveDialog, recipeDialog, goalRewardDialog, upgradeDialog, warehouseDialog, gmDialog].forEach((dialog) => {
+  [saveDialog, recipeDialog, goalRewardDialog, upgradeDialog, confirmDialog, warehouseDialog, gmDialog].forEach((dialog) => {
     if (dialog?.open) dialog.close();
   });
 }
@@ -3728,8 +3742,6 @@ function deviceFromResource(resource) {
   }[resource] || null;
 }
 
-const GM_PASSWORD = "111222";
-
 function gmResourceCategory(key) {
   if (key === "cableStock") return "special";
   if (deviceFromResource(key)) return "device";
@@ -3804,15 +3816,18 @@ function renderGmPreview() {
   `;
 }
 
-function openGmPasswordGate() {
-  const password = window.prompt("请输入 GM 密码");
-  if (password === null) return;
-  if (password !== GM_PASSWORD) {
-    setStatus("GM 密码错误", "error");
+async function openGmPasswordGate() {
+  try {
+    const result = await apiRequest("/api/admin/gm-session");
+    if (!result.ok) throw new Error("没有 GM 权限");
+    currentUser = result.user || currentUser;
+  } catch (error) {
+    setStatus(error.message || "没有 GM 权限", "error");
     return;
   }
   renderGmResourceOptions();
   gmDialog?.showModal();
+  setStatus("GM 面板已打开", "ok");
 }
 
 function warehouseCanAcceptGmResource(node, resource) {
@@ -5312,6 +5327,8 @@ function checkStageCompletion() {
 
 function createSaveData() {
   return {
+    saveVersion: CLIENT_SAVE_VERSION,
+    gameVersion: CLIENT_GAME_VERSION,
     nodes: state.nodes,
     links: state.links,
     powerLinks: state.powerLinks,
@@ -5324,6 +5341,150 @@ function createSaveData() {
     logisticsPeak: state.logisticsPeak,
     nextId
   };
+}
+
+function migrateSaveData(data) {
+  const migrated = structuredClone(data || {});
+  let version = Number(migrated.saveVersion || 1);
+  if (version < 1) version = 1;
+  if (version === 1) {
+    migrated.claimedGoalRewards ||= {};
+    migrated.completedGoalSteps ||= {};
+    migrated.productionStats ||= {};
+    migrated.logisticsPeak ||= 0;
+    migrated.cableStock ??= 12;
+    migrated.completed = Boolean(migrated.completed);
+    migrated.saveVersion = 2;
+    version = 2;
+  }
+  migrated.saveVersion = CLIENT_SAVE_VERSION;
+  migrated.gameVersion ||= CLIENT_GAME_VERSION;
+  return migrated;
+}
+
+async function apiRequest(path, options = {}) {
+  try {
+    const response = await fetch(path, {
+      credentials: "same-origin",
+      headers: {
+        "Content-Type": "application/json",
+        ...(options.headers || {})
+      },
+      ...options
+    });
+    const payload = await response.json().catch(() => ({}));
+    serverOnline = true;
+    if (!response.ok) {
+      if (response.status === 401) currentUser = null;
+      const error = new Error(payload.error || "服务器请求失败");
+      error.isApiError = true;
+      throw error;
+    }
+    return payload;
+  } catch (error) {
+    if (error.isApiError) throw error;
+    serverOnline = false;
+    throw new Error(error.message === "Failed to fetch" ? "服务器连接异常，请不要关闭页面，稍后重试保存" : error.message);
+  }
+}
+
+function setLoginError(text = "") {
+  if (loginError) loginError.textContent = text;
+}
+
+async function refreshCurrentUser() {
+  try {
+    const result = await apiRequest("/api/me");
+    currentUser = result.user || null;
+  } catch {
+    currentUser = null;
+  }
+  return currentUser;
+}
+
+async function submitAuth(mode) {
+  const username = loginUser?.value.trim();
+  const password = loginPassword?.value || "";
+  if (!username || !password) {
+    setLoginError("请输入账号和密码");
+    return;
+  }
+  setLoginError(mode === "register" ? "正在注册..." : "正在登录...");
+  try {
+    const result = await apiRequest(`/api/auth/${mode}`, {
+      method: "POST",
+      body: JSON.stringify({ username, password })
+    });
+    currentUser = result.user;
+    setLoginError("");
+    setStatus(`已登录：${currentUser.username}`, "ok");
+    showScreen("menu");
+  } catch (error) {
+    setLoginError(error.message);
+  }
+}
+
+async function logoutGame() {
+  try {
+    await apiRequest("/api/auth/logout", { method: "POST", body: "{}" });
+  } catch {
+    // Logging out should still clear the local session view if the server is unreachable.
+  }
+  currentUser = null;
+  serverSaveSlots = [];
+  closeOpenDialogs();
+  showScreen("login");
+  setStatus("已退出登录", "ok");
+}
+
+function gameConfirm({ title = "确认操作", message = "", okText = "确认", danger = true } = {}) {
+  return new Promise((resolve) => {
+    if (!confirmDialog || !confirmDialogOk || !confirmDialogCancel) {
+      resolve(false);
+      return;
+    }
+    confirmDialogTitle.textContent = title;
+    confirmDialogMessage.textContent = message;
+    confirmDialogOk.textContent = okText;
+    confirmDialogOk.classList.toggle("danger", danger);
+    const cleanup = (value) => {
+      confirmDialogOk.onclick = null;
+      confirmDialogCancel.onclick = null;
+      document.querySelector("#close-confirm-dialog").onclick = null;
+      confirmDialog.close();
+      resolve(value);
+    };
+    confirmDialogOk.onclick = () => cleanup(true);
+    confirmDialogCancel.onclick = () => cleanup(false);
+    document.querySelector("#close-confirm-dialog").onclick = () => cleanup(false);
+    confirmDialog.oncancel = (event) => {
+      event.preventDefault();
+      cleanup(false);
+    };
+    if (!confirmDialog.open) confirmDialog.showModal();
+  });
+}
+
+async function checkServerHealth(silent = true) {
+  try {
+    await apiRequest("/api/health");
+    if (lastServerOnline === false) setStatus("服务器连接已恢复", "ok");
+    lastServerOnline = true;
+    if (!silent) setStatus("服务器连接正常", "ok");
+    return true;
+  } catch (error) {
+    if (lastServerOnline !== false && currentUser) setStatus("服务器连接异常，请暂停关闭页面并稍后重试保存", "error");
+    lastServerOnline = false;
+    if (!silent) setStatus(error.message, "error");
+    return false;
+  }
+}
+
+function savePayloadSummary(data) {
+  const nodes = data.nodes?.length || 0;
+  const links = (data.links?.length || 0) + (data.powerLinks?.length || 0);
+  const cores = Math.floor(data.productionStats?.mechanical_core || 0);
+  return `${nodes} 节点 / ${links} 连线 / 机械核心 ${cores}`;
 }
 
 function readSaveSlots() {
@@ -5370,6 +5531,7 @@ function escapeHtml(text) {
 }
 
 function saveSlotSummary(slot) {
+  if (slot.summary) return slot.summary;
   const data = slot.data || {};
   const nodes = data.nodes?.length || 0;
   const links = (data.links?.length || 0) + (data.powerLinks?.length || 0);
@@ -5377,38 +5539,65 @@ function saveSlotSummary(slot) {
   return `${nodes} 节点 / ${links} 连线 / 机械核心 ${cores}`;
 }
 
-function saveToSlot(slotId = null) {
-  const slots = readSaveSlots();
-  const now = Date.now();
-  const data = createSaveData();
-  if (slotId) {
-    const slot = slots.find((item) => item.id === slotId);
-    if (!slot) return;
-    slot.name = saveNameInput.value.trim() || slot.name;
-    slot.savedAt = now;
-    slot.data = data;
-    setStatus(`已覆盖存档：${slot.name}`, "ok");
-  } else {
-    const slot = {
-      id: `save-${now}-${Math.floor(Math.random() * 1000)}`,
-      name: saveSlotName(),
-      savedAt: now,
-      data
-    };
-    slots.unshift(slot);
-    setStatus(`已新建存档：${slot.name}`, "ok");
-  }
-  writeSaveSlots(slots);
-  saveNameInput.value = "";
-  renderSaveSlots();
+async function fetchSaveSlots() {
+  if (!currentUser) await refreshCurrentUser();
+  if (!currentUser) throw new Error("请先登录");
+  const result = await apiRequest("/api/saves");
+  serverSaveSlots = result.saves || [];
+  return serverSaveSlots;
 }
 
-function deleteSaveSlot(slotId) {
-  const slots = readSaveSlots();
-  const slot = slots.find((item) => item.id === slotId);
-  writeSaveSlots(slots.filter((item) => item.id !== slotId));
-  setStatus(`已删除存档：${slot?.name || "未知存档"}`, "ok");
-  renderSaveSlots();
+async function saveToSlot(slotId = null) {
+  const now = Date.now();
+  const data = createSaveData();
+  const summary = savePayloadSummary(data);
+  try {
+    if (slotId) {
+      const slot = serverSaveSlots.find((item) => item.id === String(slotId));
+      if (!slot) return;
+      const name = saveNameInput.value.trim() || slot.name;
+      const confirmed = await gameConfirm({
+        title: "覆盖服务器存档",
+        message: `确认用当前工厂覆盖「${name}」吗？旧内容会被替换。`,
+        okText: "覆盖存档"
+      });
+      if (!confirmed) return;
+      await apiRequest(`/api/saves/${slotId}`, {
+        method: "PUT",
+        body: JSON.stringify({ name, data, summary })
+      });
+      setStatus(`已覆盖服务器存档：${name}`, "ok");
+    } else {
+      const name = saveSlotName();
+      await apiRequest("/api/saves", {
+        method: "POST",
+        body: JSON.stringify({ name, data, summary })
+      });
+      setStatus(`已新建服务器存档：${name}`, "ok");
+    }
+    saveNameInput.value = "";
+    await renderSaveSlots();
+  } catch (error) {
+    setStatus(error.message, "error");
+    if (saveSlotList) saveSlotList.innerHTML = `<div class="save-empty">${escapeHtml(error.message)}</div>`;
+  }
+}
+
+async function deleteSaveSlot(slotId) {
+  const slot = serverSaveSlots.find((item) => item.id === String(slotId));
+  try {
+    const confirmed = await gameConfirm({
+      title: "删除服务器存档",
+      message: `确认删除「${slot?.name || "未知存档"}」吗？这个操作无法恢复。`,
+      okText: "删除存档"
+    });
+    if (!confirmed) return;
+    await apiRequest(`/api/saves/${slotId}`, { method: "DELETE" });
+    setStatus(`已删除服务器存档：${slot?.name || "未知存档"}`, "ok");
+    await renderSaveSlots();
+  } catch (error) {
+    setStatus(error.message, "error");
+  }
 }
 
 function loadSaveData(data, name = "本地存档") {
@@ -5416,6 +5605,7 @@ function loadSaveData(data, name = "本地存档") {
     setStatus("存档数据为空", "error");
     return;
   }
+  data = migrateSaveData(data);
   state.nodes = (data.nodes || []).map(hydrateNode);
   state.links = (data.links || []).map((link) => applyLogisticsLineStats({ packets: [], totalMoved: 0, emitBuffer: 0, ...link }));
   state.powerLinks = (data.powerLinks || []).map((link) => ({ capacity: 40, load: 0, overloaded: false, ...link }));
@@ -5444,13 +5634,20 @@ function loadSaveData(data, name = "本地存档") {
   render();
 }
 
-function renderSaveSlots() {
-  const slots = readSaveSlots().sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0));
+async function renderSaveSlots() {
   saveDialogTitle.textContent = saveDialogMode === "save" ? "保存游戏" : "读取游戏";
   saveDialogSubtitle.textContent = saveDialogMode === "save"
-    ? "新建一个存档，或点击覆盖已有槽位。"
-    : "选择一个槽位读取，或删除不需要的存档。";
+    ? "新建服务器存档，或点击覆盖已有槽位。"
+    : "选择一个服务器槽位读取，或删除不需要的存档。";
   document.querySelector(".save-create-row").style.display = saveDialogMode === "save" ? "grid" : "none";
+  saveSlotList.innerHTML = `<div class="save-empty">正在读取服务器存档...</div>`;
+  let slots = [];
+  try {
+    slots = await fetchSaveSlots();
+  } catch (error) {
+    saveSlotList.innerHTML = `<div class="save-empty">${escapeHtml(error.message)}</div>`;
+    return;
+  }
   if (!slots.length) {
     saveSlotList.innerHTML = `<div class="save-empty">暂无存档槽位</div>`;
     return;
@@ -5474,9 +5671,21 @@ function renderSaveSlots() {
     button.addEventListener("click", () => saveToSlot(button.dataset.saveOverwrite));
   });
   saveSlotList.querySelectorAll("[data-save-load]").forEach((button) => {
-    button.addEventListener("click", () => {
-      const slot = readSaveSlots().find((item) => item.id === button.dataset.saveLoad);
-      loadSaveData(slot?.data, slot?.name);
+    button.addEventListener("click", async () => {
+      try {
+        const slot = serverSaveSlots.find((item) => item.id === String(button.dataset.saveLoad));
+        const confirmed = await gameConfirm({
+          title: "读取服务器存档",
+          message: `确认读取「${slot?.name || "未知存档"}」吗？当前未保存的工厂进度会丢失。`,
+          okText: "读取存档",
+          danger: false
+        });
+        if (!confirmed) return;
+        const result = await apiRequest(`/api/saves/${button.dataset.saveLoad}`);
+        loadSaveData(result.save?.data, result.save?.name);
+      } catch (error) {
+        setStatus(error.message, "error");
+      }
     });
   });
   saveSlotList.querySelectorAll("[data-save-delete]").forEach((button) => {
@@ -5484,10 +5693,10 @@ function renderSaveSlots() {
   });
 }
 
-function openSaveDialog(mode) {
+async function openSaveDialog(mode) {
   saveDialogMode = mode;
-  renderSaveSlots();
   saveDialog.showModal();
+  await renderSaveSlots();
 }
 
 function saveGame() {
@@ -5626,13 +5835,10 @@ window.addEventListener("keydown", (event) => {
 
 loginForm?.addEventListener("submit", (event) => {
   event.preventDefault();
-  if (!loginUser?.value.trim() || !loginPassword?.value.trim()) {
-    if (loginError) loginError.textContent = "请输入账号和密码";
-    return;
-  }
-  if (loginError) loginError.textContent = "";
-  showScreen("menu");
+  submitAuth("login");
 });
+registerButton?.addEventListener("click", () => submitAuth("register"));
+logoutButton?.addEventListener("click", logoutGame);
 
 document.querySelector("#start-new-game")?.addEventListener("click", startNewGame);
 document.querySelector("#open-load-menu")?.addEventListener("click", () => openSaveDialog("load"));
@@ -5804,4 +6010,11 @@ document.querySelector("#clear-all").addEventListener("click", () => {
 
 setDeviceTab("资源");
 render();
+refreshCurrentUser().then((user) => {
+  if (user) {
+    showScreen("menu");
+    setStatus(`欢迎回来：${user.username}`, "ok");
+  }
+});
+setInterval(() => checkServerHealth(true), 30000);
 requestAnimationFrame(simulate);

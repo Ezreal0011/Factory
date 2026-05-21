@@ -31,7 +31,7 @@
       <form class="login-card">
         <span class="gate-kicker">INDUSTRIAL NETWORK</span>
         <h1>机械工业时代</h1>
-        <p>登录后进入工厂控制台。当前版本账号密码可任意填写。</p>
+        <p>注册或登录账号后进入工厂控制台，存档会保存到服务器。</p>
         <label>
           <span>账号</span>
           <input id="login-user" autocomplete="username" placeholder="输入账号" />
@@ -40,7 +40,10 @@
           <span>密码</span>
           <input id="login-password" autocomplete="current-password" type="password" placeholder="输入密码" />
         </label>
-        <button id="login-submit" type="submit">登录</button>
+        <div class="login-actions">
+          <button id="login-submit" type="submit">登录</button>
+          <button id="register-submit" type="button">注册</button>
+        </div>
         <small id="login-error" class="login-error"></small>
       </form>
     </section>
@@ -79,6 +82,7 @@
           <button id="start-new-game" type="button">开始新游戏</button>
           <button id="open-load-menu" type="button">加载游戏</button>
           <button id="open-rules" type="button">游戏规则介绍</button>
+          <button id="logout-game" type="button">退出登录</button>
         </div>
       </div>
     </section>
@@ -305,6 +309,21 @@
       </div>
     </dialog>
 
+    <dialog id="confirm-dialog" class="confirm-dialog">
+      <div class="confirm-dialog-head">
+        <div>
+          <div class="confirm-dialog-kicker">SYSTEM CONFIRM</div>
+          <h2 id="confirm-dialog-title">确认操作</h2>
+          <p id="confirm-dialog-message"></p>
+        </div>
+        <button id="close-confirm-dialog" class="recipe-close-button" type="button">×</button>
+      </div>
+      <div class="confirm-dialog-actions">
+        <button id="cancel-confirm-dialog" type="button">取消</button>
+        <button id="ok-confirm-dialog" class="danger" type="button">确认</button>
+      </div>
+    </dialog>
+
     <dialog id="gm-dialog" class="gm-dialog">
       <div class="gm-dialog-head">
         <div>
@@ -315,7 +334,7 @@
         <button id="close-gm-dialog" class="recipe-close-button" type="button">×</button>
       </div>
       <div class="gm-dialog-body">
-        <div class="gm-warning">当前 GM 密码和加资源逻辑仅用于本地开发，上线服务器前必须迁移到服务端。</div>
+        <div class="gm-warning">GM 面板仅管理员账号可打开。服务器版本会校验账号角色。</div>
         <div class="gm-controls">
           <label>
             <span>分类</span>

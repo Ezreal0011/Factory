@@ -4,7 +4,12 @@
   "private": true,
   "scripts": {
     "build-config": "node tools/convert-config.js",
-    "start": "node server.mjs"
+    "backup": "node tools/backup-db.mjs",
+    "start": "node server.mjs",
+    "deploy:local": "node server.mjs"
+  },
+  "engines": {
+    "node": ">=24"
   },
   "devDependencies": {
     "xlsx": "^0.18.5"

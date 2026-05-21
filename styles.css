@@ -255,6 +255,16 @@ button {
   font-weight: 900;
 }
 
+.login-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.login-actions button {
+  width: 100%;
+}
+
 .login-card button:hover,
 .menu-actions button:hover,
 .rules-head button:hover {
@@ -3061,6 +3071,62 @@ dialog button.danger {
   border-color: rgba(255, 228, 92, 0.68);
   background: linear-gradient(180deg, rgba(255, 228, 92, 0.22), rgba(255, 228, 92, 0.08));
   color: #fff2a8;
+  font-weight: 900;
+}
+
+.confirm-dialog {
+  width: min(500px, calc(100vw - 42px));
+  padding: 0;
+  border-color: rgba(95, 189, 232, 0.52);
+  background:
+    linear-gradient(135deg, rgba(95, 189, 232, 0.14), transparent 40%),
+    linear-gradient(180deg, #0d2634 0%, #06131f 100%);
+  box-shadow: 0 28px 82px rgba(0, 0, 0, 0.66), 0 0 38px rgba(95, 189, 232, 0.12), inset 0 0 26px rgba(95, 189, 232, 0.08);
+}
+
+.confirm-dialog-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 18px 20px;
+  border-bottom: 1px solid rgba(95, 189, 232, 0.28);
+  background:
+    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.035) 0 1px, transparent 1px 12px),
+    rgba(7, 24, 38, 0.94);
+}
+
+.confirm-dialog-kicker {
+  margin-bottom: 5px;
+  color: #5fbde8;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.confirm-dialog-head h2 {
+  margin: 0 0 6px;
+  color: #f8fcff;
+  font-size: 22px;
+}
+
+.confirm-dialog-head p {
+  margin: 0;
+  color: #c8eaff;
+  line-height: 1.5;
+}
+
+.confirm-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 14px 20px 18px;
+  border-top: 1px solid rgba(95, 189, 232, 0.2);
+}
+
+.confirm-dialog-actions .danger {
+  border-color: rgba(255, 100, 105, 0.68);
+  background: linear-gradient(180deg, rgba(255, 100, 105, 0.22), rgba(255, 100, 105, 0.08));
+  color: #ffd6d8;
   font-weight: 900;
 }
 

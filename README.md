@@ -4,19 +4,193 @@
 
 ## 运行方式
 
-项目不依赖 npm 包，直接使用 Node.js 启动本地静态服务器：
+当前版本已经内置服务器能力：玩家可以通过网页注册、登录，并把多个存档保存到服务器数据库中。
+
+本地开发运行：
 
 ```bash
-node server.mjs
+npm start
 ```
 
 打开浏览器访问：
 
 ```text
-http://127.0.0.1:5174
+http://localhost:5174
 ```
 
-也可以直接打开 `index.html` 体验基础页面，但推荐使用本地服务器运行。
+服务器默认监听 `0.0.0.0:5174`，同一局域网或云服务器放行端口后，其他玩家可以通过服务器 IP 或域名访问。
+
+> 服务器需要 Node.js 24 或更高版本，因为服务端使用了 Node 内置 SQLite。
+
+## 一键部署
+
+### Docker 部署（推荐）
+
+Linux / 云服务器：
+
+```bash
+git clone https://github.com/Ezreal0011/Factory.git
+cd Factory
+chmod +x deploy.sh
+./deploy.sh
+```
+
+Windows / PowerShell：
+
+```powershell
+git clone https://github.com/Ezreal0011/Factory.git
+cd Factory
+.\deploy.ps1
+```
+
+部署完成后访问：
+
+```text
+http://服务器IP:5174
+```
+
+如需修改端口：
+
+```bash
+PORT=8080 ./deploy.sh
+```
+
+Windows：
+
+```powershell
+.\deploy.ps1 -Port 8080
+```
+
+### 手动 Docker Compose
+
+```bash
+cp .env.example .env
+# 修改 .env 里的 SESSION_SECRET
+docker compose up -d --build
+```
+
+数据库会保存在：
+
+```text
+./data/factory.sqlite
+```
+
+这个目录已经通过 Docker volume 挂载，升级镜像或重启容器不会丢失玩家账号和存档。
+
+## 服务器功能
+
+- 玩家注册
+- 玩家登录
+- Cookie 会话保持
+- 管理员 GM 权限校验
+- 多存档创建
+- 多存档读取
+- 覆盖存档
+- 删除存档
+- 存档版本迁移
+- 静态托管游戏前端
+- SQLite 持久化账号和存档数据
+
+主要 API：
+
+```text
+POST /api/auth/register
+POST /api/auth/login
+POST /api/auth/logout
+GET  /api/me
+GET  /api/saves
+POST /api/saves
+GET  /api/saves/:id
+PUT  /api/saves/:id
+DELETE /api/saves/:id
+GET  /api/admin/gm-session
+```
+
+## 环境变量
+
+复制 `.env.example` 为 `.env`：
+
+```text
+PORT=5174
+HOST=0.0.0.0
+DATA_DIR=./data
+SESSION_SECRET=change-this-to-a-long-random-secret
+COOKIE_SECURE=false
+GAME_VERSION=0.1.0
+ADMIN_USERNAME=
+ADMIN_PASSWORD=
+BACKUP_DIR=./backups
+BACKUP_KEEP=30
+```
+
+正式部署建议：
+
+- `SESSION_SECRET` 改成足够长的随机字符串。
+- 如需开启 GM 面板，设置 `ADMIN_USERNAME` 和 `ADMIN_PASSWORD`，服务器启动时会自动创建或更新管理员账号。
+- 使用域名和 HTTPS 后，把 `COOKIE_SECURE=true`。
+- 云服务器安全组放行 `PORT` 对应端口。
+
+## GM 管理
+
+当前 GM 面板已经从前端固定密码改为服务端管理员校验：
+
+1. 在 `.env` 中设置 `ADMIN_USERNAME` 和 `ADMIN_PASSWORD`。
+2. 重启服务器。
+3. 用该管理员账号登录游戏。
+4. 点击标题旁的 `GM管理` 按钮即可打开 GM 面板。
+
+普通玩家点击 GM 面板会被服务器拒绝。后续接入正式服务端时，可以继续把这里扩展成角色权限、操作日志和后台审计。
+
+## 数据备份
+
+账号和存档数据库默认在：
+
+```text
+./data/factory.sqlite
+```
+
+手动备份：
+
+```bash
+npm run backup
+```
+
+Windows：
+
+```powershell
+.\backup.ps1
+```
+
+Linux / 云服务器：
+
+```bash
+chmod +x backup.sh
+./backup.sh
+```
+
+备份会生成到 `BACKUP_DIR`，默认 `./backups`。`BACKUP_KEEP` 控制保留数量，默认保留最近 30 份。
+
+## 更新与兼容
+
+更新代码：
+
+```bash
+git pull
+docker compose up -d --build
+```
+
+账号和存档保存在 `./data`，不会因为代码更新丢失。
+
+存档数据内包含：
+
+```text
+saveVersion
+gameVersion
+```
+
+后续如果节点结构、配方、资源名发生变化，应在读取存档前增加迁移逻辑，例如 `v1 -> v2 -> v3`，保证老玩家存档可以继续读取。
+
+当前版本内置 `v1 -> v2` 迁移：会补齐目标奖励、任务完成状态、生产统计、物流峰值、线缆库存和完成状态等缺失字段。
 
 ## 当前核心玩法
 
@@ -28,7 +202,7 @@ http://127.0.0.1:5174
 - 熔炉、高温熔炼炉、铸造厂和组装工厂支持配方选择。
 - 配方选择使用分组弹窗，展示材料、产物和用途说明。
 - 仓库支持单资源锁定、清空后自动解除锁定、输入/输出口开关和出口限流。
-- 支持多存档创建、覆盖、读取和删除。
+- 支持服务器多存档创建、覆盖、读取和删除。
 
 ## 封装分组系统
 
@@ -119,7 +293,16 @@ http://127.0.0.1:5174
 ├── index.html      # 页面结构
 ├── styles.css      # 游戏 UI 和动画样式
 ├── app.js          # 游戏状态、生产、电力、物流和交互逻辑
-├── server.mjs      # 本地静态服务器
+├── server.mjs      # Web 服务器、账号系统和存档 API
+├── Dockerfile      # 容器镜像
+├── docker-compose.yml
+├── deploy.sh       # Linux / 云服务器一键部署
+├── deploy.ps1      # Windows 一键部署
+├── backup.sh       # Linux / 云服务器数据库备份
+├── backup.ps1      # Windows 数据库备份
+├── .env.example    # 环境变量模板
+├── data/           # 本地/服务器数据库目录，不提交 Git
+├── backups/        # 数据库备份目录，不提交 Git
 └── README.md       # 项目说明
 ```
 
@@ -133,8 +316,8 @@ http://127.0.0.1:5174
 - 仓库缓冲和分流
 - 电网负载与线缆过载
 - 图形化监控面板
-- 多槽位存档
+- 账号登录和服务器多槽位存档
 - 封装分组和组内/组外端口映射
 - 封装节点接口面板显示
 
-后续可继续扩展科技树、设备升级、更多资源链、产能统计和新手引导。
+后续可继续扩展科技树、更多资源链、产能统计、新手引导、服务端 GM 后台和存档迁移系统。
